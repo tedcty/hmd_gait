@@ -1,0 +1,194 @@
+class walker
+# def hip_joint1(self, trc, ref):
+    #     ref = self.ref_marker["pelvis"]
+    #     left_knee_list = []
+    #     right_knee_list = []
+    #     # pelvis = np.zeros([3, 5])
+    #     # pel = (np.array([trc.marker_set[m].iloc[i, :].to_list() for m in MetaMarkerSet.pelvis.value])).T
+    #     # offset = 1
+    #     end = 268
+    #     skip = [267, 601, 1089, 1198]
+    #     idx = [i for i in range(0, end) if i not in skip]
+    #
+    #     def filter_marker(marker_set):
+    #         markers = {}
+    #         for c in marker_set:
+    #             dx = trc.marker_set[c].to_numpy()
+    #             xt = np.array([trc.data[i, 1] for i in range(0, dx.shape[0])])
+    #             x = np.array([trc.data[i, 1] for i in range(0, dx.shape[0]) if np.sum(np.isnan(dx[i])) == 0])
+    #             xi = np.array([i for i in range(0, dx.shape[0]) if np.sum(np.isnan(dx[i])) == 0])
+    #             dxc = np.array([dx[i] for i in range(0, dx.shape[0]) if np.sum(np.isnan(dx[i])) == 0])
+    #             dxd = np.zeros(dx.shape)
+    #             for i in range(0, 3):
+    #                 p = interpolate.InterpolatedUnivariateSpline(x, dxc[:, i])
+    #                 v0 = p(xt)
+    #                 v1 = Butterworth.butter_low_filter(v0, 6, 100)
+    #                 dxd[:, i] = v1
+    #             markers[c] = {'i': [j for j in range(xi[0], xi[-1])], 'x': xt[xi[0]:xi[-1]],
+    #                                'y': dxd[xi[0]:xi[-1], :]}
+    #         return markers
+    #
+    #     left_markers = filter_marker(MetaMarkerSet.left_upper_leg.value)
+    #     right_markers = filter_marker(MetaMarkerSet.right_upper_leg.value)
+    #     # for c in MetaMarkerSet.left_upper_leg.value:
+    #     #     dx = trc.marker_set[c].to_numpy()
+    #     #     xt = np.array([trc.data[i, 1] for i in range(0, dx.shape[0])])
+    #     #     x = np.array([trc.data[i, 1] for i in range(0, dx.shape[0]) if np.sum(np.isnan(dx[i])) == 0])
+    #     #     xi = np.array([i for i in range(0, dx.shape[0]) if np.sum(np.isnan(dx[i])) == 0])
+    #     #     dxc = np.array([dx[i] for i in range(0, dx.shape[0]) if np.sum(np.isnan(dx[i])) == 0])
+    #     #     dxd = np.zeros(dx.shape)
+    #     #     for i in range(0, 3):
+    #     #         p = interpolate.InterpolatedUnivariateSpline(x, dxc[:, i])
+    #     #         v0 = p(xt)
+    #     #         v1 = Butterworth.butter_low_filter(v0, 6, 100)
+    #     #         dxd[:, i] = v1
+    #     #     left_markers[c] = {'i': [j for j in range(xi[0], xi[-1])], 'x': xt[xi[0]:xi[-1]], 'y': dxd[xi[0]:xi[-1], :]}
+    #     # plt.figure()
+    #     # for c in MetaMarkerSet.left_upper_leg.value:
+    #     #     plt.plot(left_markers[c]['x'], left_markers[c]['y'])
+    #     #     break
+    #     # for c in MetaMarkerSet.left_upper_leg.value:
+    #     #     plt.plot(trc.data[:, 1], trc.marker_set[c].to_numpy())
+    #     #     break
+    #     # plt.show()
+    #
+    #     mc = [c for c in left_markers]
+    #     ts = mc[0]
+    #     if left_markers[mc[1]]['i'][0] > left_markers[ts]['i'][0]:
+    #         ts = left_markers[mc[1]]['i'][0]
+    #     idx_list = left_markers[ts]['i']
+    #     for i in idx_list:
+    #         pelvis = np.zeros([3, 5])
+    #         pel = (np.array([trc.marker_set[m].iloc[i, :].to_list() for m in MetaMarkerSet.pelvis.value])).T
+    #         if np.sum(np.isnan(pel)) > 0:
+    #             continue
+    #         translate = np.nanmean(pel, axis=1)
+    #         pelvis[:, 0] = translate
+    #         pelvis[:, 1:] = pel
+    #         pelvis = pelvis - Walker.repeat(pelvis[:, 0], 5)
+    #         rt = Cloud.transform_between_3x3_points_sets(ref, pelvis)[:3, :3]
+    #         # pca_pelvis = PCAModel.pca_rotation(pelvis.T)
+    #         # rt = pca_pelvis.transformation
+    #         ref_pelvis = np.matmul(rt, pelvis)
+    #         # plt.figure()
+    #         # ax = plt.axes(projection='3d')
+    #         # ax.scatter(ref_pelvis[0, :], ref_pelvis[1, :], ref_pelvis[2, :])
+    #         # ax.scatter(pelvis[0, :], pelvis[1, :], pelvis[2, :])
+    #         # plt.show()
+    #         # rt = Cloud.rigid_body_transform(pelvis, ref)
+    #
+    #         mk2 = {}
+    #         for c in left_markers:
+    #             mx = np.empty(trc.marker_set[c].shape)
+    #             mx[:] = np.nan
+    #             for z in range(0, left_markers[c]['y'].shape[0]):
+    #                 mx[left_markers[c]['i'][z], :] = left_markers[c]['y'][z, :]
+    #             mk2[c] = mx
+    #
+    #         lk0 = np.transpose(np.array([mk2[c][i, :] for c in mk2]))
+    #         if np.sum(np.isnan(lk0)) > 0:
+    #             continue
+    #         lk1 = lk0-Walker.repeat(translate, 2)
+    #         x1 = np.matmul(rt, lk1)
+    #         L_knee = np.squeeze(np.nanmean(x1, axis=1).tolist())
+    #         med = np.squeeze(x1[:, 0])
+    #         lat = np.squeeze(x1[:, 1])
+    #         # plt.figure()
+    #         # ax = plt.axes(projection='3d')
+    #         # ax.scatter(ref_pelvis[0, :], ref_pelvis[1, :], ref_pelvis[2, :])
+    #         # ax.scatter(L_knee[0], L_knee[1], L_knee[2])
+    #         # ax.scatter(med[0], med[1], med[2])
+    #         # ax.scatter(lat[0], lat[1], lat[2])
+    #         # plt.show()
+    #         left_knee_list.append(np.squeeze(L_knee))
+    #
+    #         # rup = {}
+    #         # for c in MetaMarkerSet.right_upper_leg.value:
+    #         #     x = np.ones([3, 1])
+    #         #     mk = np.atleast_2d(trc.marker_set[c].iloc[i, :].to_list())-translate
+    #         #     # x[:3, 0] = mk
+    #         #     # x1 = np.matmul(rt, x)
+    #         #     # rup[c] = x1[:3, :].T
+    #         #     rup[c] = mk
+    #         # r_knee = (rup[MetaMarkerSet.right_upper_leg.value[0]] + rup[
+    #         #     MetaMarkerSet.right_upper_leg.value[1]]) / 2
+    #         # right_knee_list.append(np.squeeze(r_knee))
+    #     lefty = np.squeeze(left_knee_list)
+    #     plt.figure()
+    #     plt.plot(lefty)
+    #     plt.show()
+    #     plt.figure()
+    #     ax = plt.axes(projection='3d')
+    #     ax.scatter(lefty[:, 0], lefty[:, 1], lefty[:, 2])
+    #     plt.show()
+    #     rc = np.squeeze(Cloud.sphere_fit(lefty))
+    #     left_hip = rc
+    #
+    #     righty = np.array([n for n in right_knee_list if np.sum(np.isnan(n)) == 0])
+    #     rc = np.squeeze(Cloud.sphere_fit(righty))
+    #     right_hip = rc
+    #     self.joints_lower["hip"]["left"] = left_hip.tolist()
+    #     self.joints_lower["hip"]["right"] = right_hip.tolist()
+    #     return None
+    #
+    # def hip_joint0(self, trc, ref):
+    #     left_knee_list = []
+    #     right_knee_list = []
+    #     # e0 =  np.array(trc.marker_set[MetaMarkerSet.left_upper_leg.value[0]].iloc[0, :].to_list())
+    #     # e1 = np.array(trc.marker_set[MetaMarkerSet.left_upper_leg.value[1]].iloc[0, :].to_list())
+    #     # self.joints_lower['knee']['left'] = 0.5*(e0+e1)
+    #     # e0 = np.array(trc.marker_set[MetaMarkerSet.right_upper_leg.value[0]].iloc[self.keyframe, :].to_list())
+    #     # e1 = np.array(trc.marker_set[MetaMarkerSet.right_upper_leg.value[1]].iloc[self.keyframe, :].to_list())
+    #     # self.joints_lower['knee']['right'] = 0.5*(e0+e1)
+    #     # e0 = np.array(trc.marker_set[MetaMarkerSet.left_lower_leg.value[2]].iloc[10, :].to_list())
+    #     # e1 = np.array(trc.marker_set[MetaMarkerSet.left_lower_leg.value[3]].iloc[10, :].to_list())
+    #     # self.joints_lower['ankle']['left'] = 0.5 * (e0 + e1)
+    #     # e0 = np.array(trc.marker_set[MetaMarkerSet.right_lower_leg.value[2]].iloc[10, :].to_list())
+    #     # e1 = np.array(trc.marker_set[MetaMarkerSet.right_lower_leg.value[3]].iloc[10, :].to_list())
+    #     # self.joints_lower['ankle']['right'] = 0.5 * (e0 + e1)
+    #
+    #     pelvis = np.zeros([3, 5])
+    #     pel = (np.array([trc.marker_set[m].iloc[self.keyframe, :].to_list() for m in MetaMarkerSet.pelvis.value])).T
+    #     offset = 1
+    #     for i in range(1, trc.data.shape[0]):
+    #
+    #         if np.sum(np.isnan(pel)) > 0:
+    #             pel = (np.array(
+    #                 [trc.marker_set[m].iloc[self.keyframe+offset, :].to_list() for m in MetaMarkerSet.pelvis.value])).T
+    #             offset+=1
+    #             continue
+    #         pelvis[:, 0] = np.nanmean(pel, axis=1)
+    #         pelvis[:, 1:] = pel
+    #         pelvis = pelvis - Walker.repeat(pelvis[:, 0], 5)
+    #         rt = Cloud.rigid_body_transform(pelvis, ref)
+    #
+    #         lup = {}
+    #         for c in MetaMarkerSet.left_upper_leg.value:
+    #             x = np.ones([4, 1])
+    #             mk = np.atleast_2d(trc.marker_set[c].iloc[i, :].to_list())
+    #             x[:3, 0] = mk
+    #             x1 = np.matmul(rt, x)
+    #             lup[c] = x1[:3, :].T
+    #         L_knee = (lup[MetaMarkerSet.left_upper_leg.value[0]] + lup[MetaMarkerSet.left_upper_leg.value[1]]) / 2
+    #         left_knee_list.append(np.squeeze(L_knee))
+    #
+    #         rup = {}
+    #         for c in MetaMarkerSet.right_upper_leg.value:
+    #             x = np.ones([4, 1])
+    #             mk = np.atleast_2d(trc.marker_set[c].iloc[i, :].to_list())
+    #             x[:3, 0] = mk
+    #             x1 = np.matmul(rt, x)
+    #             rup[c] = x1[:3, :].T
+    #         r_knee = (rup[MetaMarkerSet.right_upper_leg.value[0]] + rup[
+    #             MetaMarkerSet.right_upper_leg.value[1]]) / 2
+    #         right_knee_list.append(np.squeeze(r_knee))
+    #     lefty = np.array([n for n in left_knee_list if np.sum(np.isnan(n)) == 0])
+    #     rc = np.squeeze(Cloud.sphere_fit(lefty))
+    #     left_hip = rc
+    #
+    #     righty = np.array([n for n in right_knee_list if np.sum(np.isnan(n)) == 0])
+    #     rc = np.squeeze(Cloud.sphere_fit(righty))
+    #     right_hip = rc
+    #     self.joints_lower["hip"]["left"] = left_hip.tolist()
+    #     self.joints_lower["hip"]["right"] = right_hip.tolist()
+    #     return None
