@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-participant_id = "P014"  # Replace with the actual participant ID
-session_id = "Straight VR 1_Reconstructed"  # Replace with the actual session ID
+participant_id = "P010"  # Replace with the actual participant ID
+session_id = "Obstacles VR 1"  # Replace with the actual session ID
 
 infile = fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc"
 outfile = fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc"
@@ -42,10 +42,10 @@ rename_map = {
     'l_foot:L_DP1': 'L_DP1',
     'l_foot:L_LatAnkle': 'L_LatAnkle',
     'l_foot:L_LMedAnkle': 'L_MedAnkle',
-    'l_arms:L_Lat_HumEpicondyle': 'L_Lat_HumEpicondyle',
-    'l_arms:L_Med_HumEpicondyle': 'L_Med_HumEpicondyle',
-    'l_arms:L_Radius': 'L_Radius',
-    'l_arms:L_Ulna': 'L_Ulna'
+    'l_arm:L_Lat_HumEpicondyle': 'L_Lat_HumEpicondyle',
+    'l_arm:L_Med_HumEpicondyle': 'L_Med_HumEpicondyle',
+    'l_arm:L_Radius': 'L_Radius',
+    'l_arm:L_Ulna': 'L_Ulna'
 }
 
 # Read & update the header
