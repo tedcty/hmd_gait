@@ -55,14 +55,9 @@ def read_kinematic_data(kinematic, participant_id, session_id):
 participant_id = 'P001' # NOTE: Replace with the actual participant ID
 session_id = 'Defined normal 1' # NOTE: Replace with the actual session ID
 
-if 'normal' in session_id:
-    session_id_imu = session_id.replace(' normal ', ' ') # IMU folder names for normal sessions are do not have 'normal'
-else:
-    session_id_imu = session_id
-
 # Read both IMUs
 # NOTE: Change to left arm if needed
-time, rolls, pitches, yaws = read_euler_angles('RightUpperArm', participant_id, session_id_imu)
+time, rolls, pitches, yaws = read_euler_angles('RightUpperArm', participant_id, session_id)
 
 # Shift time so it starts at 0
 time -= time[0]
