@@ -1,8 +1,8 @@
 from yatpkg.util.data import TRC, Yatsdo
 import numpy as np
 
-participant_id = "P017"  # Replace with the actual participant ID
-session_id = "Reactive AR 2_Reconstructed"  # Replace with the actual session ID
+participant_id = "P001"  # Replace with the actual participant ID
+session_id = "Straight AR 3_Reconstructed"  # Replace with the actual session ID
 
 # Load TRC (no automatic filling)
 trc = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)

@@ -1,7 +1,7 @@
 # Removes trailing whitespace and tabs from a TRC file, while preserving the first 5 lines.
 
 participant_id = "P013"  # Replace with the actual participant ID
-session_id = "Reactive AR 1_Reconstructed"  # Replace with the actual session ID
+session_id = "Obstacles VR 1_Reconstructed"  # Replace with the actual session ID
 
 input_path = fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc"
 output_path = fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc"
