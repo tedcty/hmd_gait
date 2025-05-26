@@ -1,3 +1,4 @@
+
 import pandas as pd
 from ptb.util.gait.helpers import OsimHelper
 from ptb.util.data import MocapDO
@@ -7,6 +8,7 @@ import numpy as np
 import copy
 from scipy.optimize import minimize
 from scipy.spatial.transform import Rotation
+import os
 
 cost_ret = []
 def eul_dist(x, y):
@@ -68,10 +70,72 @@ def cost(v, model, mocap):
     return ret
 
 if __name__ == '__main__':
-    opens_model = OsimHelper("M:/temp/P048.osim")
+    model_dir = "M:/temp/"
+    mt = [m for m in os.listdir(model_dir) if m.lower().startswith("p")]
+    mt = ['P009.osim']
+    for m in mt:
+        particpant = m[:m.rindex(".")]
+        mf = [s for s in os.listdir("M:/Mocap/{0}/".format(particpant)) if 'session' in s.lower()]
+        opens_model = OsimHelper("{0}{1}.osim".format(model_dir, particpant))
+        k0 = copy.deepcopy(opens_model.markerset)
+
+        trials = [t for t in os.listdir("M:/Mocap/{0}/{1}".format(particpant, mf[0])) if t.endswith("c3d") and t =='Free normal 1.c3d']
+
+        p = [c for c in opens_model.state_variable_names_processed if 'N_A' not in c]
+        keys = [k for k in opens_model.markerset]
+        for t in trials:
+            mocap_data = MocapDO.create_from_c3d("M:/Mocap/{0}/{1}/{2}".format(particpant, mf[0], t))
+            mset = mocap_data.markers.marker_set
+            unit = 1
+            if mocap_data.markers.headers['Units'] == 'mm':
+                unit = 0.001
+            frames = mocap_data.markers.data.shape[0]
+            frame = 211
+            tf = np.array([(unit * mset[t].iloc[frame, :]).to_list() for t in keys])
+            n0 = k0.to_numpy()
+            n1 = tf.T
+            where_nans = np.isnan(n1[0, :])
+            n0a = np.zeros([3, int(n0.shape[1]-np.sum(where_nans))])
+            n1a = np.zeros([3, int(n0.shape[1] - np.sum(where_nans))])
+            idx = 0
+            for i in range(0, n0.shape[1]):
+                if not where_nans[i]:
+                    n0a[:, idx] = n0[:, i]
+                    n1a[:, idx] = n1[:, i]
+                    idx+= 1
+            ct = Cloud.rigid_body_transform(n0a, n1a)
+            r = Rotation.from_matrix(ct[:3, :3])
+            rx = r.as_euler('zxy', degrees=True)
+            x0 = np.array([0.0 for i in range(0, len(p))])
+            x0[:3] = rx
+            x0[3:6] = ct[:3, 3]
+            opens_model.set_joints(x0)
+            result = minimize(cost, x0, args=(opens_model, n1,), method='Powell')
+            x1 = result.x
+            print(cost(x1, opens_model, n1))
+            opens_model.set_joints(x1)
+            n2 = (copy.deepcopy(opens_model.markerset)).to_numpy()
+            col = [c for c in opens_model.markerset]
+            nx = np.zeros(n2.shape)
+            for i in range(0, n2.shape[1]):
+                if not where_nans[i]:
+                    nx[:, i] = 0.1*n2[:, i]+ 0.9*n1[:, 1]
+                else:
+                    nx[:, i] = n2[:, i]
+                pass
+
+            for c in opens_model.markerset:
+                cur_marker = nx[:, col.index(c)]*1000
+                cur_frame_trc = mocap_data.marker_set[c].iloc[frame, :]
+                mocap_data.marker_set[c].iloc[frame, :] = nx[:, col.index(c)]
+                pass
+            pass
+
+
+    opens_model = OsimHelper("M:/temp/P009.osim")
     k0 = copy.deepcopy(opens_model.markerset)
     keys = [k for k in k0.columns]
-    mocap_data = MocapDO.create_from_c3d("M:/Mocap/P048/New Session/P048 Cal 01.c3d")
+    mocap_data = MocapDO.create_from_c3d("M:/Mocap/P009/New Session/Free normal 1.c3d")
     mset = mocap_data.markers.marker_set
     unit = 1
     if mocap_data.markers.headers['Units'] == 'mm':
