@@ -44,19 +44,27 @@ if __name__ == '__main__':
     participant_id = 'P001' # NOTE: Replace with the actual participant ID
     session_id = 'Reactive normal 1' # NOTE: Replace with the actual session ID
 
-    # Read both IMU and kinematic data
-    # NOTE: Change to left arm if needed (or even flexion/extension instead of adduction/abduction)
-    time_imu, rolls, pitches, yaws = read_euler_angles('RightUpperArm', participant_id, session_id)
-    time_kin, arm_kin = read_kinematic_data('arm_add_r', participant_id, session_id)
+    # Read both IMUs and kinematic data
+    # NOTE: Change to left leg if needed
+    time1, rolls1, pitches1, yaws1 = read_euler_angles('LeftUpperArm', participant_id, session_id)
+    time2, rolls2, pitches2, yaws2 = read_euler_angles('T8', participant_id, session_id)  # sternum
+    time_kin, knee_angles = read_kinematic_data('arm_add_l', participant_id, session_id)
+
+    # Ensure both IMU arrays are the same length
+    min_len = min(len(time1), len(time2))
+    time = time1[:min_len]
+    roll_diff = rolls1[:min_len] - rolls2[:min_len]
+    pitch_diff = pitches1[:min_len] - pitches2[:min_len]
+    yaw_diff = yaws1[:min_len] - yaws2[:min_len]
 
     # Initial plots
     ig, axs = plt.subplots(1, 2, figsize=(14,6))
-    axs[0].plot(time_imu, pitches, label='Upper Arm IMU Pitch')
-    axs[0].set(xlabel='Time (s)', ylabel='Angle (°)', title='IMU Pitch')
+    axs[0].plot(time, pitch_diff, label='Pitch Difference')
+    axs[0].set(xlabel='Time (s)', ylabel='Angle Difference (°)', title='Pitch Difference between IMUs (UpperArm - Sternum)')
     axs[0].legend(); axs[0].grid(True)
 
-    axs[1].plot(time_kin, arm_kin, label='Arm Adduction', color='orange')
-    axs[1].set(xlabel='Time (s)', ylabel='Angle (°)', title='Arm Adduction')
+    axs[1].plot(time_kin, knee_angles, label='Knee Angle', color='orange')
+    axs[1].set(xlabel='Time (s)', ylabel='Arm Adduction Angle (°)', title='Arm Adduction Over Time')
     axs[1].legend(); axs[1].grid(True)
 
     plt.tight_layout()
@@ -68,8 +76,8 @@ if __name__ == '__main__':
         exit()
 
     # Subtract each signal's mean before cross-correlation
-    x = pitches - np.mean(pitches)
-    y = arm_kin - np.mean(arm_kin)
+    x = pitch_diff - np.mean(pitch_diff)
+    y = knee_angles - np.mean(knee_angles)
     
     # Calculate cross-correlation and lag estimation
     corr = correlate(x, y, mode='full')
