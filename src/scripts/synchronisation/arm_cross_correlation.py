@@ -41,8 +41,8 @@ def read_kinematic_data(kinematic, participant_id, session_id):
 
 
 if __name__ == '__main__':
-    participant_id = 'P001' # NOTE: Replace with the actual participant ID
-    session_id = 'Reactive normal 1' # NOTE: Replace with the actual session ID
+    participant_id = 'P019' # NOTE: Replace with the actual participant ID
+    session_id = 'Straight VR 3' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
