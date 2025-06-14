@@ -41,8 +41,8 @@ def read_kinematic_data(kinematic, participant_id, session_id):
 
 
 if __name__ == '__main__':
-    participant_id = 'P019' # NOTE: Replace with the actual participant ID
-    session_id = 'Straight VR 3' # NOTE: Replace with the actual session ID
+    participant_id = 'P010' # NOTE: Replace with the actual participant ID
+    session_id = 'Obstacles VR 1' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
@@ -64,7 +64,7 @@ if __name__ == '__main__':
     axs[0].legend(); axs[0].grid(True)
 
     axs[1].plot(time_kin, knee_angles, label='Knee Angle', color='orange')
-    axs[1].set(xlabel='Time (s)', ylabel='Knee Angle (°)', title='Knee Angle Over Time')
+    axs[1].set(xlabel='Time (s)', ylabel='Knee Angle (°)', title='Kinematic Knee Angle (Flexion/Extension)')
     axs[1].legend(); axs[1].grid(True)
 
     plt.tight_layout()
