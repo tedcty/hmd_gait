@@ -1,8 +1,8 @@
 from yatpkg.util.data import TRC, Yatsdo
 import numpy as np
 
-participant_id = "P001"  # Replace with the actual participant ID
-session_id = "Straight AR 3_Reconstructed"  # Replace with the actual session ID
+participant_id = "P026"  # Replace with the actual participant ID
+session_id = "Obstacle AR 01"  # Replace with the actual session ID
 
 # Load TRC (no automatic filling)
 trc = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)
@@ -10,12 +10,12 @@ df  = trc.to_panda()
 
 # Identify source and target columns
 time_col = 'Time'
-src_cols = ['R_PSIS_X8', 'R_PSIS_Y8', 'R_PSIS_Z8']
-tgt_cols = ['R_ASIS_X5', 'R_ASIS_Y5', 'R_ASIS_Z5']
+src_cols = ['L_ASIS_X6', 'L_ASIS_Y6', 'L_ASIS_Z6']
+tgt_cols = ['R_PSIS_X8', 'R_PSIS_Y8', 'R_PSIS_Z8']
 # Note: The columns are assumed to be named as per the original TRC file. Adjust if necessary.
 
-# Pick a calibration frame where both markers are present
-cal_idx = df.dropna(subset=src_cols + tgt_cols).index[0]
+# Pick the last calibration frame where both markers are present
+cal_idx = df.dropna(subset=src_cols + tgt_cols).index[-1]
 src_cal = df.loc[cal_idx, src_cols].to_numpy()
 tgt_cal = df.loc[cal_idx, tgt_cols].to_numpy()
 
