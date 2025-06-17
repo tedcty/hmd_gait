@@ -42,11 +42,12 @@ def upsample_csv(input_path, output_path, orig_freq=60, target_freq=100):
 
 def upsample_all_csvs(root_folder, orig_freq=60, target_freq=100):
     for csv_file in glob.glob(os.path.join(root_folder, '**', '*.csv'), recursive=True):
-        print(f"Upsampling {csv_file}")
-        upsample_csv(csv_file, csv_file, orig_freq, target_freq)
+        if not csv_file.endswith('.sto.csv'):
+            print(f"Upsampling {csv_file}")
+            upsample_csv(csv_file, csv_file, orig_freq, target_freq)
 
 if __name__ == "__main__":
-    root_folder = fr'Z:\Upper Body\IMU\P043'
+    root_folder = fr'Z:\Upper Body\IMU\P026'
     upsample_all_csvs(root_folder)
     if skipped_files:
         print("Skipped files due to empty time column:")
