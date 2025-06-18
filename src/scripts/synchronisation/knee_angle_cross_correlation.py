@@ -41,14 +41,14 @@ def read_kinematic_data(kinematic, participant_id, session_id):
 
 
 if __name__ == '__main__':
-    participant_id = 'P010' # NOTE: Replace with the actual participant ID
-    session_id = 'Obstacles VR 1' # NOTE: Replace with the actual session ID
+    participant_id = 'P026' # NOTE: Replace with the actual participant ID
+    session_id = 'Straight vr 01' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
-    time1, rolls1, pitches1, yaws1 = read_euler_angles('LeftLowerLeg', participant_id, session_id)
-    time2, rolls2, pitches2, yaws2 = read_euler_angles('LeftUpperLeg', participant_id, session_id)
-    time_kin, knee_angles = read_kinematic_data('knee_angle_l', participant_id, session_id)
+    time1, rolls1, pitches1, yaws1 = read_euler_angles('RightLowerLeg', participant_id, session_id)
+    time2, rolls2, pitches2, yaws2 = read_euler_angles('RightUpperLeg', participant_id, session_id)
+    time_kin, knee_angles = read_kinematic_data('knee_angle_r', participant_id, session_id)
 
     # Ensure both IMU arrays are the same length
     min_len = min(len(time1), len(time2))
