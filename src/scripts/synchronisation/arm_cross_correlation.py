@@ -1,4 +1,4 @@
-from scripts.synchronisation.sync_utils import read_euler_angles, read_kinematic_data, compute_coarse_offset, refine_offset_upsample
+from sync_utils import read_euler_angles, read_kinematic_data, compute_coarse_offset, refine_offset_upsample
 from scipy.signal import correlate, correlation_lags
 import numpy as np
 import matplotlib.pyplot as plt
