@@ -1,11 +1,11 @@
-from scripts.synchronisation.sync_utils import read_euler_angles, read_kinematic_data, compute_coarse_offset, refine_offset_upsample
+from sync_utils import read_euler_angles, read_kinematic_data, compute_coarse_offset, refine_offset_upsample
 from scipy.signal import correlate, correlation_lags
 import numpy as np
 import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
-    participant_id = 'P026' # NOTE: Replace with the actual participant ID
-    session_id = 'Straight vr 01' # NOTE: Replace with the actual session ID
+    participant_id = 'P001' # NOTE: Replace with the actual participant ID
+    session_id = 'Combination AR 2' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
