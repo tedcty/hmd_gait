@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
     participant_id = 'P001' # NOTE: Replace with the actual participant ID
-    session_id = 'Combination AR 2' # NOTE: Replace with the actual session ID
+    session_id = 'Obstacle normal 1' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
@@ -61,6 +61,6 @@ if __name__ == '__main__':
     plt.tight_layout()
     plt.show()
 
-    # Precise refinement via upsampling
-    precise_lag = refine_offset_upsample(x, y, fs=100, up_fs=1000, win_sec=0.1)
-    print(f"Refined offset via upsampling: {precise_lag:.6f} seconds")
+    # # Precise refinement via upsampling
+    # precise_lag = refine_offset_upsample(x, y, fs=100, up_fs=1000, win_sec=0.1)
+    # print(f"Refined offset via upsampling: {precise_lag:.6f} seconds")
