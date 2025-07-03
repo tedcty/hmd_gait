@@ -2,16 +2,17 @@ from sync_utils import read_euler_angles, read_kinematic_data, compute_coarse_of
 from scipy.signal import correlate, correlation_lags
 import numpy as np
 import matplotlib.pyplot as plt
+from ptb.util.math.filters import Butterworth
 
 if __name__ == '__main__':
-    participant_id = 'P001' # NOTE: Replace with the actual participant ID
-    session_id = 'Obstacle normal 1' # NOTE: Replace with the actual session ID
+    participant_id = 'P043' # NOTE: Replace with the actual participant ID
+    session_id = 'straight VR 1' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
-    time1, rolls1, pitches1, yaws1 = read_euler_angles('RightLowerLeg', participant_id, session_id)
-    time2, rolls2, pitches2, yaws2 = read_euler_angles('RightUpperLeg', participant_id, session_id)
-    time_kin, knee_angles = read_kinematic_data('knee_angle_r', participant_id, session_id)
+    time1, rolls1, pitches1, yaws1 = read_euler_angles('LeftLowerLeg', participant_id, session_id)
+    time2, rolls2, pitches2, yaws2 = read_euler_angles('LeftUpperLeg', participant_id, session_id)
+    time_kin, knee_angles = read_kinematic_data('knee_angle_l', participant_id, session_id)
 
     # Ensure both IMU arrays are the same length
     min_len = min(len(time1), len(time2))
@@ -19,6 +20,12 @@ if __name__ == '__main__':
     roll_diff = rolls1[:min_len] - rolls2[:min_len]
     pitch_diff = pitches1[:min_len] - pitches2[:min_len]
     yaw_diff = yaws1[:min_len] - yaws2[:min_len]
+
+    # Apply Butterworth low-pass filter to the pitch difference and knee angles
+    pitch_diff = Butterworth.butter_low_filter(data=pitch_diff, fs=100, cut=3)
+    # pitch_diff = pitch_diff / np.max(np.abs(pitch_diff))
+    knee_angles = Butterworth.butter_low_filter(data=knee_angles, fs=100, cut=3)
+    # knee_angles = knee_angles / np.max(np.abs(knee_angles))
 
     # Initial plots
     ig, axs = plt.subplots(1, 2, figsize=(14,6))
@@ -61,6 +68,14 @@ if __name__ == '__main__':
     plt.tight_layout()
     plt.show()
 
-    # # Precise refinement via upsampling
-    # precise_lag = refine_offset_upsample(x, y, fs=100, up_fs=1000, win_sec=0.1)
-    # print(f"Refined offset via upsampling: {precise_lag:.6f} seconds")
+    # Visual check of alignment
+    aligned_time_imu = time - lag_sec
+    plt.plot(aligned_time_imu, pitch_diff, label='IMU pitch difference')
+    plt.plot(time_kin, knee_angles, label='Knee angle (shifted)')
+    plt.legend(); plt.grid(True)
+    plt.title(f'Peak‐based alignment (offset = {lag_sec:.3f}s)')
+    plt.show()
+
+    # Precise refinement via upsampling
+    precise_lag = refine_offset_upsample(x, y, fs=100, up_fs=1000, win_sec=0.1)
+    print(f"Refined offset via upsampling: {precise_lag:.6f} seconds")

@@ -1,5 +1,6 @@
 from yatpkg.util.data import TRC
 import numpy as np
+setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 from yatpkg.math.transformation import Cloud
 
 participant_id = "P026"  # Replace with the actual participant ID
