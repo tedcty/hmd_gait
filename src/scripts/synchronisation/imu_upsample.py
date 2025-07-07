@@ -44,7 +44,7 @@ def upsample_all_csvs(root_folder, orig_freq=60, target_freq=100):
             upsample_csv(csv_file, csv_file, orig_freq, target_freq)
 
 if __name__ == "__main__":
-    root_folder = fr'Z:\Upper Body\IMU\Reactive AR 1'
+    root_folder = fr'Z:\Upper Body\IMU'
     upsample_all_csvs(root_folder)
     if skipped_files:
         print("Skipped files due to empty time column:")
