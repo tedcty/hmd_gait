@@ -51,10 +51,6 @@ def sync_imu_with_kinematics(offsets_df):
     for pid, trial in offsets_df.iterrows():
         # Loop through each task and condition for the current participant
         for (task, cond), offset in trial.items():
-
-            # Sync IMU data with kinematics data using the offset time
-            print(f"Syncing IMU and kinematic data for {pid} {task} {cond} with offset time {offset}s")
-
             # Search for specific task's IMU folder in participant folder
             imu_participant_folder = os.path.join('Z:/Upper Body/IMU', pid)
             for folder in os.listdir(imu_participant_folder):
