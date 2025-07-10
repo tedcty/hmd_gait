@@ -66,7 +66,8 @@ def sync_imu_with_kinematics(offsets_df):
                     kinematic_file = os.path.join(kinematic_participant_folder, file)
 
             # Read kinematics data from the MOT file
-            kin_df = StorageIO.load(kinematic_file)
+            kin_storage = StorageIO.load(kinematic_file)
+            kin_df = kin_storage.data  # DataFrame with kinematic data
 
             # Read IMU data for each CSV file in the task folder
             imu_streams = {}  # Dictionary to hold multiple IMU streams
