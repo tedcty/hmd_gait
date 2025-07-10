@@ -133,15 +133,19 @@ if __name__ == "__main__":
 
     # Read offset times from offset times Excel file into a DataFrame
     offsets_df = read_offset_times(file_path="Z:/Upper Body/IMU-Kinematics Offset.xlsx")
+    print("Offset times read successfully.")
 
     # Read event labels from event labels Excel file into a DataFrame
     events_df = read_event_labels(file_path="Z:/Upper Body/Event labels.xlsx")
+    print("Event labels read successfully.")
 
     # Sync IMU data with kinematics data using the offset times
     synced_data = sync_imu_with_kinematics(offsets_df)
+    print("IMU data synced with kinematics data successfully.")
 
     # Trim all streams from synced data based on the event labels
     trimmed_data = trim_all_streams(synced_data, events_df, pre=0.2, post=0.2, time_col='time')
+    print("All streams trimmed based on event labels successfully.")
 
     # Save the trimmed files
     for (pid, task, cond), streams in trimmed_data.items():
