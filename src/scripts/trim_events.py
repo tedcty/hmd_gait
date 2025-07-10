@@ -116,6 +116,10 @@ def trim_all_streams(synced_data, events_df, pre=0.2, post=0.2, time_col='time')
     trimmed = {}
     # Loop through each participant's data in the synced_data dictionary
     for (pid, task, cond), streams in synced_data.items():
+        # Ignore Reactive tasks
+        if task not in events_df:
+            print(f"Skipping {pid} {task} {cond} as it is not in the event labels.")
+            continue
         print(f"Trimming data for {pid} {task} {cond}")
         # Trim the kinematics stream
         kin_windows = trim_events(streams['kin'], events_df, pid, task, cond, time_col=time_col, pre=pre, post=post)
