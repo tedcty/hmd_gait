@@ -102,10 +102,19 @@ def trim_events(df, events_dict, pid, task, cond, time_col='time', pre=0.2, post
     events = event_df.columns.levels[0]
 
     for event in events:
-        # Pull the start and end times for the event
-        start = event_df.loc[(pid, cond), (event, 'Start')] - pre
-        end = event_df.loc[(pid, cond), (event, 'End')] + post
+        # Pull the raw start and end times for the event
+        raw_start = event_df.loc[(pid, cond), (event, 'Start')]
+        raw_end = event_df.loc[(pid, cond), (event, 'End')]
 
+        # Skip any missing labels
+        if pd.isna(raw_start) or pd.isna(raw_end):
+            continue
+
+        # Apply pre and post padding
+        start = raw_start - pre
+        end = raw_end + post
+
+        # Build mask and slice
         mask = (df[time_col] >= start) & (df[time_col] <= end)
         trimmed[event] = df.loc[mask].copy()
 
