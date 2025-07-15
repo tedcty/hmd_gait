@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from enum import Enum
+import re
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 
@@ -27,8 +28,15 @@ class UpperBodyClassifier:
                         imu_df = pd.read_csv(file_path)
                         # Shift time so the event always starts at 0
                         imu_df['time'] = imu_df['time'] - imu_df['time'].min()
+                        # Apply 4th order Butterworth low-pass filter (6 Hz cut-off frequency) to all columns except 'time' and 'id'
+                        cols_to_filter = [col for col in imu_df.columns if col not in ['time', 'id']]
+                        for col in cols_to_filter:
+                            imu_df[col] = Butterworth.butter_low_filter(imu_df[col], cut=6, fs=100, order=4)
                         # Append to the main DataFrame with filename under new 'id' column
-                        imu_df['id'] = file.replace('_imu_vec3_2_raw.csv', '')
+                        # Extract id: remove everything before and including '_Normal_', '_AR_', or '_VR_' and the suffix
+                        id_str = file.replace('_imu_vec3_2_raw.csv', '')
+                        id_str = re.sub(r'^.*?_(Normal|AR|VR)_', '', id_str)
+                        imu_df['id'] = id_str
                         # Reorder columns to make 'id' the first column
                         cols = ['id'] + [col for col in imu_df.columns if col != 'id']
                         imu_df = imu_df[cols]
@@ -52,17 +60,40 @@ class UpperBodyClassifier:
                         kinematics_df = pd.read_csv(file_path)
                         # Shift time so the event always starts at 0
                         kinematics_df['time'] = kinematics_df['time'] - kinematics_df['time'].min()
-                        # Append to the main DataFrame with filename under new 'id' column
-                        kinematics_df['id'] = file.replace('.mot.csv', '')
+                        # Apply 4th order Butterworth low-pass filter (6 Hz cut-off frequency) to all columns except 'time' and 'id'
+                        cols_to_filter = [col for col in kinematics_df.columns if col not in ['time', 'id']]
+                        for col in cols_to_filter:
+                            kinematics_df[col] = Butterworth.butter_low_filter(kinematics_df[col], cut=6, fs=100, order=4)
+                        # Extract id: remove everything before and including '_Normal_', '_AR_', or '_VR_' and the suffix
+                        id_str = file.replace('.mot.csv', '')
+                        id_str = re.sub(r'^.*?_(Normal|AR|VR)_', '', id_str)
+                        kinematics_df['id'] = id_str
                         # Keep only time and upper body kinematics columns
                         cols_to_keep = ['time'] + [c for c in kin_cols if c in kinematics_df.columns]
                         kinematics_df = kinematics_df[cols_to_keep].copy()
                         # Reorder columns to make 'id' the first column
-                        kinematics_df['id'] = file.replace('.mot.csv', '')
+                        kinematics_df['id'] = id_str
                         kinematics_df = kinematics_df[['id'] + cols_to_keep]
 
                         all_dfs.append(kinematics_df)
-        return pd.concat(all_dfs, ignore_index=True)
+        return pd.concat(all_dfs, ignore_index=True)    
+
+    @staticmethod
+    def y_label_column(df, start_buffer=0.2, end_buffer=0.2):
+        # Each instance where time == 0 is a start of a new trial
+        trial_breaks = df['time'].eq(0).cumsum()
+        # Initialise all zeros
+        labels = pd.Series(0, index=df.index, name='y')
+        # Group by (id, trial_breaks) so each actual event is handled separately
+        for (_, _), idx in df.groupby([df['id'], trial_breaks]).groups.items():
+            t = df.loc[idx, 'time']
+            t_max = t.max()
+            mask = ((t >= start_buffer) & (t <= (t_max - end_buffer))).astype(int)
+            labels.loc[idx] = mask.values
+
+        return labels
+    
+# NOTE: Figure out window size for each event's feature extraction
 
 
 class UpperBodyKinematics(Enum):
@@ -89,5 +120,8 @@ class UpperBodyIMU(Enum):
 if __name__ == "__main__":
     imu_data = UpperBodyClassifier.upper_body_imu_for_event(event="Dribbling basketball")
     print(imu_data.head())
-    # Export to CSV
-    imu_data.to_csv("Z:/Upper Body/upper_body_imu_data.csv", index=False)  # Just to check
+    y_imu = UpperBodyClassifier.y_label_column(imu_data)
+    print(y_imu.head())
+    # Export combined to CSV
+    combined_imu = pd.concat([imu_data, y_imu], axis=1)
+    combined_imu.to_csv("Z:/Upper Body/upper_body_imu_combined.csv", index=False)

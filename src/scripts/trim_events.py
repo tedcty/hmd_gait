@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 from ptb.util.io.helper import StorageIO
 
@@ -93,53 +94,52 @@ def sync_imu_with_kinematics(offsets_df):
     return synced
 
 
-def trim_events(df, events_dict, pid, task, cond, time_col='time', pre=0.2, post=0.2):
-    # Extract the event DataFrame for the specified task
+def trim_events(df, events_dict, pid, task, cond, time_col='time', pre=0.2, post=0.2, sample_rate=100):
+    # Grab the event‐labels DataFrame for this task
     event_df = events_dict[task]
     trimmed = {}
-
-    # Event level contains the event names
+    # List of events
     events = event_df.columns.levels[0]
+    # Sort once per call
+    df_sorted = df.sort_values(time_col).reset_index(drop=True)
 
+    # Loop through each event
     for event in events:
-        # Pull the raw start and end times for the event
+        # Check if the event exists for this participant and condition
         raw_start = event_df.loc[(pid, cond), (event, 'Start')]
-        raw_end = event_df.loc[(pid, cond), (event, 'End')]
-
-        # Skip any missing labels
+        raw_end   = event_df.loc[(pid, cond), (event, 'End')]
         if pd.isna(raw_start) or pd.isna(raw_end):
             continue
 
-        # Apply pre and post padding
-        start = raw_start - pre
-        end = raw_end + post
+        # Compute window in seconds
+        start_time = raw_start - pre
+        end_time   = raw_end   + post
 
-        # Build mask and slice
-        mask = (df[time_col] >= start) & (df[time_col] <= end)
-        trimmed[event] = df.loc[mask].copy()
+        # Convert to sample indices
+        start_idx = int(np.ceil(start_time * sample_rate))
+        end_idx   = int(np.floor(end_time   * sample_rate))
+
+        # Slice by position
+        trimmed[event] = df_sorted.iloc[start_idx : end_idx + 1].copy()
 
     return trimmed
 
 
 def trim_all_streams(synced_data, events_df, pre=0.2, post=0.2, time_col='time'):
     trimmed = {}
-    # Loop through each participant's data in the synced_data dictionary
+    # Loop through each participant's data in the synced data
     for (pid, task, cond), streams in synced_data.items():
-        # Ignore Reactive tasks
+        # Check if the task and condition exist in the event labels
         if task not in events_df:
             print(f"Skipping {pid} {task} {cond} as it is not in the event labels.")
             continue
         print(f"Trimming data for {pid} {task} {cond}")
-        # Trim the kinematics stream
-        kin_windows = trim_events(streams['kin'], events_df, pid, task, cond, time_col=time_col, pre=pre, post=post)
-        # Trim each IMU stream
+        # Use the index‐based trim for kinematics and each IMU
+        kin_windows = trim_events(streams['kin'],  events_df, pid, task, cond, time_col=time_col, pre=pre, post=post, sample_rate=100)
         imu_windows = {}
         for imu_file, imu_df in streams['imu'].items():
-            imu_windows[imu_file] = trim_events(imu_df, events_df, pid, task, cond, time_col=time_col, pre=pre, post=post)
-        trimmed[(pid, task, cond)] = {
-            'kin': kin_windows,
-            'imu': imu_windows
-        }
+            imu_windows[imu_file] = trim_events(imu_df, events_df, pid, task, cond, time_col=time_col, pre=pre, post=post, sample_rate=100)
+        trimmed[(pid, task, cond)] = {'kin': kin_windows, 'imu': imu_windows}
     return trimmed
 
 
