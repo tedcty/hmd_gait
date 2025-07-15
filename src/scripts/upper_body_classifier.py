@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import numpy as np
 from enum import Enum
 import re
 from ptb.ml.ml_util import MLOperations
@@ -79,21 +80,27 @@ class UpperBodyClassifier:
         return pd.concat(all_dfs, ignore_index=True)    
 
     @staticmethod
-    def y_label_column(df, start_buffer=0.2, end_buffer=0.2):
+    def y_label_column(df, start_buffer=0.2, end_buffer=0.2, fs=100):
         # Each instance where time == 0 is a start of a new trial
         trial_breaks = df['time'].eq(0).cumsum()
         # Initialise all zeros
         labels = pd.Series(0, index=df.index, name='y')
-        # Group by (id, trial_breaks) so each actual event is handled separately
-        for (_, _), idx in df.groupby([df['id'], trial_breaks]).groups.items():
-            t = df.loc[idx, 'time']
-            t_max = t.max()
-            mask = ((t >= start_buffer) & (t <= (t_max - end_buffer))).astype(int)
-            labels.loc[idx] = mask.values
+        # Group each (id, trial) separately
+        groups = df.groupby([df['id'], trial_breaks]).groups
+        for (_, _), idx in groups.items():
+            n = len(idx)
+            # How many samples to skip at start and end
+            skip_start = int(np.round(start_buffer * fs))
+            skip_end   = int(np.round(end_buffer   * fs))
+
+            # Make a zero array, then set 1’s in the core window
+            mask = np.zeros(n, dtype=int)
+            mask[skip_start : n - skip_end] = 1
+
+            # Assign back into the labels Series
+            labels.loc[idx] = mask
 
         return labels
-    
-# NOTE: Figure out window size for each event's feature extraction
 
 
 class UpperBodyKinematics(Enum):
