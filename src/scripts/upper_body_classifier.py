@@ -101,6 +101,53 @@ class UpperBodyClassifier:
             labels.loc[idx] = mask
 
         return labels
+    
+    @staticmethod
+    def sliding_window(df, window_size, stride=1):
+        windows = []
+        # Assign a trial index within each id
+        df = df.copy()
+        df['trial'] = df['time'].eq(0).cumsum()
+
+        # Group by 'id' and 'trial'
+        for (id_val, trial_idx), group in df.groupby(['id', 'trial']):
+            group = group.reset_index(drop=True)
+            n = len(group)
+            # For every possible start
+            for start in range(0, n - window_size + 1, stride):
+                w = group.iloc[start:start + window_size].copy()
+                windows.append(w)
+        return windows
+    
+    @staticmethod
+    def feature_extraction(data, y):
+        # Merge y labels into the data
+        data['y'] = y
+        # Window combined data
+        windows = UpperBodyClassifier.sliding_window(data, window_size=100, stride=1)
+        # Extract features using tsfresh on each window and at the same time do a majority-vote on y labels
+        feature_dfs = []
+        y_window = {}
+        for window in windows:
+            wid = window['id'].iat[0]
+            # Majority vote on y labels
+            vals = window['y'].to_numpy()
+            # If more than half the samples are 1, then the window is labelled as 1
+            y_window[wid] = int(vals.mean() > 0.5)
+            # Drop y labels from the window
+            X = window.drop(columns=['y'])
+            # Extract features using tsfresh
+            features = MLOperations.extract_features_from_x(X)  # NOTE: Figure out whether 'id' column is right
+            feature_dfs.append(features)
+        # Concatenate into a single DataFrame
+        X_feat = pd.concat(feature_dfs)
+        y_feat = pd.Series(y_window, name='y')
+
+        return X_feat, y_feat
+    
+    @staticmethod
+    def feature_selection():
+        pass
 
 
 class UpperBodyKinematics(Enum):
@@ -124,11 +171,35 @@ class UpperBodyIMU(Enum):
     sternum = "T8"
 
 
+class EventWindowSize(Enum):
+    events = {
+        "Straight walk": 110,
+        "Stair up": 130,
+        "Stair down": 110,
+        "Pick up basketball": 150,
+        "Dribbling basketball": 80,
+        "Put down basketball": 180,
+        "Put ping pong ball in cup": 250,
+        "Step over cone": 160
+    }
+
+
 if __name__ == "__main__":
+
+    ## IMU data
+    # Create DataFrame for upper body IMU data for tsfresh
     imu_data = UpperBodyClassifier.upper_body_imu_for_event(event="Dribbling basketball")
-    print(imu_data.head())
     y_imu = UpperBodyClassifier.y_label_column(imu_data)
-    print(y_imu.head())
-    # Export combined to CSV
-    combined_imu = pd.concat([imu_data, y_imu], axis=1)
-    combined_imu.to_csv("Z:/Upper Body/upper_body_imu_combined.csv", index=False)
+    print("IMU DataFrame and y labels created.")
+    # Extract features from windowed data
+    X_imu, y_imu = UpperBodyClassifier.feature_extraction(imu_data, y_imu)
+    print("IMU features extracted.")
+
+    ## Kinematics data
+    # Create DataFrame for upper body kinematics data for tsfresh
+    kin_data = UpperBodyClassifier.upper_body_kinematics_for_event(event="Dribbling basketball")
+    y_kin = UpperBodyClassifier.y_label_column(kin_data)
+    print("Kinematics DataFrame and y labels created.")
+    # Extract features from windowed data
+    X_kin, y_kin = UpperBodyClassifier.feature_extraction(kin_data, y_kin)
+    print("Kinematics features extracted.")
