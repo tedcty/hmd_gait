@@ -17,7 +17,7 @@ import seaborn as sns
 class UpperBodyClassifier:
 
     @staticmethod
-    def upper_body_imu_for_event(event, root_dir="Z:/Upper Body/Events/IMU"):
+    def upper_body_imu_for_event(event, root_dir):
         # Create DataFrame for upper body IMU data based on the event that can be used for tsfresh feature extraction
         # Search for the event in each participant folder in the root directory
         imu_data = pd.DataFrame()
@@ -52,7 +52,7 @@ class UpperBodyClassifier:
         return imu_data
     
     @staticmethod
-    def upper_body_kinematics_for_event(event, root_dir="Z:/Upper Body/Events/Kinematics"):
+    def upper_body_kinematics_for_event(event, root_dir):
         # Create DataFrame for upper body kinematics data based on the event that can be used for tsfresh feature extraction
         # Flatten the list of all upper body kinematics columns
         kin_cols = [col_name for kinematic in UpperBodyKinematics for col_name in kinematic.value]
@@ -170,16 +170,16 @@ class UpperBodyClassifier:
         }
     
     @staticmethod
-    def export_features_with_importance(selected, top_100, filepath):
+    def export_features_with_importance(selected, top_100, results_path):
         # Slice original importance Series to only top-100
         fi = selected["feature_importance"]
         top_list = top_100["pfx"]
         top_imp_dict = fi.loc[top_list].to_dict()
         # Export as JSON using helper
-        MLOperations.export_features_json(top_imp_dict, filepath)
+        MLOperations.export_features_json(top_imp_dict, results_path)
 
     @staticmethod
-    def train_and_test_classifier(X_imu, X_kin, y_imu, y_kin, filepath):
+    def train_and_test_classifier(X_imu, X_kin, y_imu, y_kin, results_path):
         # Align and combine final feature sets of IMU and kinematics
         X_combined = pd.concat([X_imu, X_kin], axis=1)
         # Check y_imu and y_kin are equal
@@ -198,15 +198,15 @@ class UpperBodyClassifier:
         cm = confusion_matrix(y_test, y_pred)
         auc_score = roc_auc_score(y_test, y_pred)
         # Save metrics to file
-        os.makedirs(filepath, exist_ok=True)
+        os.makedirs(results_path, exist_ok=True)
         # Save accuracy and AUC scores
-        metrics_path = os.path.join(filepath, "classifier_metrics.txt")
+        metrics_path = os.path.join(results_path, "classifier_metrics.txt")
         with open(metrics_path, "w") as f:
             f.write(f"Accuracy: {accuracy:.4f}\n")
             f.write(f"AUC: {auc_score:.4f}\n")
             f.write("\n")
         # Save classification report separately
-        report_path = os.path.join(filepath, "classifier_report.txt")
+        report_path = os.path.join(results_path, "classifier_report.txt")
         with open(report_path, "w") as f:
             f.write(report)
         # Visualise and save confusion matrix
@@ -215,15 +215,42 @@ class UpperBodyClassifier:
         plt.title('Confusion Matrix')
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
-        cm_path = os.path.join(filepath, "confusion_matrix.png")
+        cm_path = os.path.join(results_path, "confusion_matrix.png")
         plt.savefig(cm_path)
 
         return clf
     
     @staticmethod
-    def export_model(clf, filepath, event):
-        model_path = os.path.join(filepath, f"{event}_rf_classifier.pkl")
+    def export_model(clf, results_path, event):
+        model_path = os.path.join(results_path, f"{event}_rf_classifier.pkl")
         joblib.dump(clf, model_path)
+
+    @staticmethod
+    def feature_engineering(event, root_dir, datatype):
+        # Combine all functions involving DataFrame creation, feature extraction and selection
+
+        # Folder directory for specific data
+        root_dir = os.path.join(root_dir, datatype)
+        # Create DataFrame for upper body data for tsfresh (IMU or kinematics)
+        if datatype == "IMU":
+            X = UpperBodyClassifier.upper_body_imu_for_event(event, root_dir)
+        elif datatype == "Kinematics":
+            X = UpperBodyClassifier.upper_body_kinematics_for_event(event, root_dir)
+        y = UpperBodyClassifier.y_label_column(X)
+        print(f"{datatype} DataFrame and y labels created.")
+        # Extract features (tsfresh) from windowed data
+        X_feat, y_feat = UpperBodyClassifier.feature_extraction(X, y)
+        print(f"{datatype} features extracted.")
+        # Select features by hypothesis testing (tsfresh)
+        X_sel = UpperBodyClassifier.feature_selection(X_feat, y_feat)
+        print(f"{datatype} features selected by hypothesis testing.")
+        # Pick the top-100 features by importance
+        top100 = MLOperations.select_top_features_from_x(X_sel["feature_importance"], num_of_feat=100)
+        # Export IMU top features with importances to JSON
+        UpperBodyClassifier.export_features_with_importance(X_sel, top100, filepath=f"Z:/Upper Body/Results/10 Participants/{datatype}_top100_features.json")
+        print(f"Found Top 100 {datatype} features by importance.")
+
+        return X_sel["X_selected"][top100["pfx"]], y_feat
 
 
 class UpperBodyKinematics(Enum):
@@ -262,44 +289,17 @@ class EventWindowSize(Enum):
 
 if __name__ == "__main__":
 
-    ## IMU data
-    # Create DataFrame for upper body IMU data for tsfresh
-    imu_data = UpperBodyClassifier.upper_body_imu_for_event(event="Dribbling basketball")
-    y_imu = UpperBodyClassifier.y_label_column(imu_data)
-    print("IMU DataFrame and y labels created.")
-    # Extract features (tsfresh) from windowed data
-    X_imu, y_imu = UpperBodyClassifier.feature_extraction(imu_data, y_imu)
-    print("IMU features extracted.")
-    # Select features by hypothesis testing (tsfresh)
-    imu_fs = UpperBodyClassifier.feature_selection(X_imu, y_imu)
-    print("IMU features selected by hypothesis testing.")
-    # Pick the top-100 IMU features by importance
-    imu_top100 = MLOperations.select_top_features_from_x(imu_fs["feature_importance"], num_of_feat=100)
-    # Export IMU top features with importances to JSON
-    UpperBodyClassifier.export_features_with_importance(imu_fs, imu_top100, filepath="Z:/Upper Body/Results/10 Participants/imu_top100_features.json")
-    print("Found Top 100 IMU features by importance.")
-
-    ## Kinematics data
-    # Create DataFrame for upper body kinematics data for tsfresh
-    kin_data = UpperBodyClassifier.upper_body_kinematics_for_event(event="Dribbling basketball")
-    y_kin = UpperBodyClassifier.y_label_column(kin_data)
-    print("Kinematics DataFrame and y labels created.")
-    # Extract features from windowed data
-    X_kin, y_kin = UpperBodyClassifier.feature_extraction(kin_data, y_kin)
-    print("Kinematics features extracted.")
-    # Select features by hypothesis testing (tsfresh)
-    kin_fs = UpperBodyClassifier.feature_selection(X_kin, y_kin)
-    print("Kinematics features selected by hypothesis testing.")
-    # Pick the top-100 IMU features by importance
-    kin_top100 = MLOperations.select_top_features_from_x(kin_fs["feature_importance"], num_of_feat=100)
-    # Export IMU top features with importances to JSON
-    UpperBodyClassifier.export_features_with_importance(kin_fs, kin_top100, filepath="Z:/Upper Body/Results/10 Participants/kin_top100_features.json")
-    print("Found Top 100 Kinematics features by importance.")
+    event = "Dribbling basketball"
+    root_dir = "Z:/Upper Body/Events/"
+    results_path = "Z:/Upper Body/Results/10 Participants"
+    
+    # IMU feature engineering algorithm outputting the final feature set and associated labels
+    X_imu_top100, y_imu = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="IMU")
+    # Kinematics feature engineering algorithm outputting the final feature set and associated labels
+    X_kin_top100, y_kin = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="Kinematics")
 
     # Train and test Random Forest Classifier model using top-100 features from both IMU and kinematics
-    X_imu_top100 = imu_fs["X_selected"][imu_top100["pfx"]]  # DataFrame for IMU top features
-    X_kin_top100 = kin_fs["X_selected"][kin_top100["pfx"]]  # DataFrame for kinematics top features
-    clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, filepath="Z:/Upper Body/Results/10 Participants")
+    clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, results_path)
 
     # Export model
-    UpperBodyClassifier.export_model(clf, filepath="Z:/Upper Body/Results/10 Participants", event="Dribbling basketball")
+    UpperBodyClassifier.export_model(clf, results_path, event)
