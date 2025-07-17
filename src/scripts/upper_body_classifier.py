@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from enum import Enum
 import re
+import joblib
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from tsfresh.transformers import FeatureSelector
@@ -218,6 +219,11 @@ class UpperBodyClassifier:
         plt.savefig(cm_path)
 
         return clf
+    
+    @staticmethod
+    def export_model(clf, filepath, event):
+        model_path = os.path.join(filepath, f"{event}_rf_classifier.pkl")
+        joblib.dump(clf, model_path)
 
 
 class UpperBodyKinematics(Enum):
@@ -294,3 +300,6 @@ if __name__ == "__main__":
     X_imu_top100 = imu_fs["X_selected"][imu_top100["pfx"]]  # DataFrame for IMU top features
     X_kin_top100 = kin_fs["X_selected"][kin_top100["pfx"]]  # DataFrame for kinematics top features
     clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, filepath="Z:/Upper Body/Results/10 Participants")
+
+    # Export model
+    UpperBodyClassifier.export_model(clf, filepath="Z:/Upper Body/Results/10 Participants", event="Dribbling basketball")
