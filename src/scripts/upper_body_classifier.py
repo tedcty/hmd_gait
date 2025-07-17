@@ -7,6 +7,10 @@ from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from tsfresh.transformers import FeatureSelector
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class UpperBodyClassifier:
@@ -149,7 +153,7 @@ class UpperBodyClassifier:
     
     @staticmethod
     def feature_selection(X, y):
-        # Select features using tsfresh's FeatureSelector transformer
+        # Select statistically significant features using tsfresh's FeatureSelector transformer
         selector = FeatureSelector()
         X_selected = selector.fit_transform(X, y)
         # Fit a RandomForestClassifier on the selected features
@@ -161,8 +165,59 @@ class UpperBodyClassifier:
             "model": clf,
             "feature": X_selected.columns.tolist(),
             "feature_importance": fi,
-            "fc_selected": X_selected
+            "X_selected": X_selected
         }
+    
+    @staticmethod
+    def export_features_with_importance(selected, top_100, filepath):
+        # Slice original importance Series to only top-100
+        fi = selected["feature_importance"]
+        top_list = top_100["pfx"]
+        top_imp_dict = fi.loc[top_list].to_dict()
+        # Export as JSON using helper
+        MLOperations.export_features_json(top_imp_dict, filepath)
+
+    @staticmethod
+    def train_and_test_classifier(X_imu, X_kin, y_imu, y_kin, filepath):
+        # Align and combine final feature sets of IMU and kinematics
+        X_combined = pd.concat([X_imu, X_kin], axis=1)
+        # Check y_imu and y_kin are equal
+        assert y_imu.equals(y_kin), "IMU and kinematics labels must match."
+        y = y_imu
+        # Split data into training and test sets for classification
+        X_train, X_test, y_train, y_test = train_test_split(X_combined, y, test_size=0.2, random_state=42)
+        # Fit Random Forest Classifier
+        clf = RandomForestClassifier()
+        clf.fit(X_train, y_train)
+        # Evaluate the classification model
+        y_pred = clf.predict(X_test)
+        # Calculate metrics
+        accuracy = accuracy_score(y_test, y_pred)
+        report = classification_report(y_test, y_pred)
+        cm = confusion_matrix(y_test, y_pred)
+        auc_score = roc_auc_score(y_test, y_pred)
+        # Save metrics to file
+        os.makedirs(filepath, exist_ok=True)
+        # Save accuracy and AUC scores
+        metrics_path = os.path.join(filepath, "classifier_metrics.txt")
+        with open(metrics_path, "w") as f:
+            f.write(f"Accuracy: {accuracy:.4f}\n")
+            f.write(f"AUC: {auc_score:.4f}\n")
+            f.write("\n")
+        # Save classification report separately
+        report_path = os.path.join(filepath, "classifier_report.txt")
+        with open(report_path, "w") as f:
+            f.write(report)
+        # Visualise and save confusion matrix
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title('Confusion Matrix')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        cm_path = os.path.join(filepath, "confusion_matrix.png")
+        plt.savefig(cm_path)
+
+        return clf
 
 
 class UpperBodyKinematics(Enum):
@@ -211,6 +266,12 @@ if __name__ == "__main__":
     print("IMU features extracted.")
     # Select features by hypothesis testing (tsfresh)
     imu_fs = UpperBodyClassifier.feature_selection(X_imu, y_imu)
+    print("IMU features selected by hypothesis testing.")
+    # Pick the top-100 IMU features by importance
+    imu_top100 = MLOperations.select_top_features_from_x(imu_fs["feature_importance"], num_of_feat=100)
+    # Export IMU top features with importances to JSON
+    UpperBodyClassifier.export_features_with_importance(imu_fs, imu_top100, filepath="Z:/Upper Body/Results/10 Participants/imu_top100_features.json")
+    print("Found Top 100 IMU features by importance.")
 
     ## Kinematics data
     # Create DataFrame for upper body kinematics data for tsfresh
@@ -222,3 +283,14 @@ if __name__ == "__main__":
     print("Kinematics features extracted.")
     # Select features by hypothesis testing (tsfresh)
     kin_fs = UpperBodyClassifier.feature_selection(X_kin, y_kin)
+    print("Kinematics features selected by hypothesis testing.")
+    # Pick the top-100 IMU features by importance
+    kin_top100 = MLOperations.select_top_features_from_x(kin_fs["feature_importance"], num_of_feat=100)
+    # Export IMU top features with importances to JSON
+    UpperBodyClassifier.export_features_with_importance(kin_fs, kin_top100, filepath="Z:/Upper Body/Results/10 Participants/kin_top100_features.json")
+    print("Found Top 100 Kinematics features by importance.")
+
+    # Train and test Random Forest Classifier model using top-100 features from both IMU and kinematics
+    X_imu_top100 = imu_fs["X_selected"][imu_top100["pfx"]]  # DataFrame for IMU top features
+    X_kin_top100 = kin_fs["X_selected"][kin_top100["pfx"]]  # DataFrame for kinematics top features
+    clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, filepath="Z:/Upper Body/Results/10 Participants")
