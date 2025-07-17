@@ -5,6 +5,8 @@ from enum import Enum
 import re
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
+from tsfresh.transformers import FeatureSelector
+from sklearn.ensemble import RandomForestClassifier
 
 
 class UpperBodyClassifier:
@@ -146,8 +148,21 @@ class UpperBodyClassifier:
         return X_feat, y_feat
     
     @staticmethod
-    def feature_selection():
-        pass
+    def feature_selection(X, y):
+        # Select features using tsfresh's FeatureSelector transformer
+        selector = FeatureSelector()
+        X_selected = selector.fit_transform(X, y)
+        # Fit a RandomForestClassifier on the selected features
+        clf = RandomForestClassifier()
+        clf.fit(X_selected, y)
+        # Get feature importances
+        fi = pd.Series(clf.feature_importances_, X_selected.columns)
+        return {
+            "model": clf,
+            "feature": X_selected.columns.tolist(),
+            "feature_importance": fi,
+            "fc_selected": X_selected
+        }
 
 
 class UpperBodyKinematics(Enum):
@@ -191,9 +206,11 @@ if __name__ == "__main__":
     imu_data = UpperBodyClassifier.upper_body_imu_for_event(event="Dribbling basketball")
     y_imu = UpperBodyClassifier.y_label_column(imu_data)
     print("IMU DataFrame and y labels created.")
-    # Extract features from windowed data
+    # Extract features (tsfresh) from windowed data
     X_imu, y_imu = UpperBodyClassifier.feature_extraction(imu_data, y_imu)
     print("IMU features extracted.")
+    # Select features by hypothesis testing (tsfresh)
+    imu_fs = UpperBodyClassifier.feature_selection(X_imu, y_imu)
 
     ## Kinematics data
     # Create DataFrame for upper body kinematics data for tsfresh
@@ -203,3 +220,5 @@ if __name__ == "__main__":
     # Extract features from windowed data
     X_kin, y_kin = UpperBodyClassifier.feature_extraction(kin_data, y_kin)
     print("Kinematics features extracted.")
+    # Select features by hypothesis testing (tsfresh)
+    kin_fs = UpperBodyClassifier.feature_selection(X_kin, y_kin)
