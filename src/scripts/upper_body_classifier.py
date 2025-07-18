@@ -129,8 +129,10 @@ class UpperBodyClassifier:
     def feature_extraction(data, y):
         # Merge y labels into the data
         data['y'] = y
+        # Pick window size based on event type from EventWindowSize
+        window_size = EventWindowSize.events.value[event]
         # Window combined data
-        windows = UpperBodyClassifier.sliding_window(data, window_size=100, stride=1)
+        windows = UpperBodyClassifier.sliding_window(data, window_size, stride=1)
         # Extract features using tsfresh on each window and at the same time do a majority-vote on y labels
         feature_dfs = []
         y_window = {}
