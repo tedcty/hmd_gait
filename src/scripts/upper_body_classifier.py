@@ -41,9 +41,8 @@ class UpperBodyClassifier:
                         for col in cols_to_filter:
                             imu_df[col] = Butterworth.butter_low_filter(imu_df[col], cut=6, fs=100, order=4)
                         # Append to the main DataFrame with filename under new 'id' column
-                        # Extract id: remove everything before and including '_Normal_', '_AR_', or '_VR_' and the suffix
+                        # Extract id: remove the suffix
                         id_str = file.replace('_imu_vec3_2_raw.csv', '')
-                        id_str = re.sub(r'^.*?_(Normal|AR|VR)_', '', id_str)
                         imu_df['id'] = id_str
                         # Reorder columns to make 'id' the first column
                         cols = ['id'] + [col for col in imu_df.columns if col != 'id']
