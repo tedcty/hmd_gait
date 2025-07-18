@@ -305,7 +305,7 @@ class EventWindowSize(Enum):
         "Pick up basketball": 150,
         "Dribbling basketball": 80,
         "Put down basketball": 180,
-        "Put ping pong ball in cup": 250,
+        "Place ping pong ball in cup": 250,
         "Step over cone": 160
     }
 
