@@ -72,9 +72,8 @@ class UpperBodyClassifier:
                         cols_to_filter = [col for col in kinematics_df.columns if col not in ['time', 'id']]
                         for col in cols_to_filter:
                             kinematics_df[col] = Butterworth.butter_low_filter(kinematics_df[col], cut=6, fs=100, order=4)
-                        # Extract id: remove everything before and including '_Normal_', '_AR_', or '_VR_' and the suffix
+                        # Extract id: remove the suffix
                         id_str = file.replace('.mot.csv', '')
-                        id_str = re.sub(r'^.*?_(Normal|AR|VR)_', '', id_str)
                         kinematics_df['id'] = id_str
                         # Keep only time and upper body kinematics columns
                         cols_to_keep = ['time'] + [c for c in kin_cols if c in kinematics_df.columns]
