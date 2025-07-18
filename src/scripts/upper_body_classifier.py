@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 from enum import Enum
-import re
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
