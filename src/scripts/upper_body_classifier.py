@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from enum import Enum
 import re
-import joblib
+from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from tsfresh.transformers import FeatureSelector
@@ -126,7 +126,7 @@ class UpperBodyClassifier:
         return windows
     
     @staticmethod
-    def feature_extraction(data, y):
+    def feature_extraction(data, y, event):
         # Merge y labels into the data
         data['y'] = y
         # Pick window size based on event type from EventWindowSize
@@ -224,7 +224,7 @@ class UpperBodyClassifier:
     @staticmethod
     def export_model(clf, results_path, event):
         model_path = os.path.join(results_path, f"{event}_rf_classifier.pkl")
-        joblib.dump(clf, model_path)
+        dump(clf, model_path)
 
     @staticmethod
     def feature_engineering(event, root_dir, datatype):
@@ -240,7 +240,7 @@ class UpperBodyClassifier:
         y = UpperBodyClassifier.y_label_column(X)
         print(f"{datatype} DataFrame and y labels created.")
         # Extract features (tsfresh) from windowed data
-        X_feat, y_feat = UpperBodyClassifier.feature_extraction(X, y)
+        X_feat, y_feat = UpperBodyClassifier.feature_extraction(X, y, event)
         print(f"{datatype} features extracted.")
         # Select features by hypothesis testing (tsfresh)
         X_sel = UpperBodyClassifier.feature_selection(X_feat, y_feat)
@@ -252,6 +252,30 @@ class UpperBodyClassifier:
         print(f"Found Top 100 {datatype} features by importance.")
 
         return X_sel["X_selected"][top100["pfx"]], y_feat
+    
+
+class UpperBodyPipeline:
+
+    @staticmethod
+    def process_event(event, root_dir, results_base):
+        # Build a results folder per event
+        safe_name = event.replace(" ", "_")
+        results_dir = os.path.join(results_base, safe_name)
+        os.makedirs(results_dir, exist_ok=True)
+
+        # IMU feature engineering algorithm outputting the final feature set and associated labels
+        X_imu_top100, y_imu = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="IMU")
+        
+        # Kinematics feature engineering algorithm outputting the final feature set and associated labels
+        X_kin_top100, y_kin = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="Kinematics")
+
+        # Train and test Random Forest Classifier model using top-100 features from both IMU and kinematics
+        clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, results_dir)
+
+        # Export the final model
+        UpperBodyClassifier.export_model(clf, results_dir, event)
+
+        return f"{event} done."
 
 
 class UpperBodyKinematics(Enum):
@@ -289,18 +313,14 @@ class EventWindowSize(Enum):
 
 
 if __name__ == "__main__":
-
-    event = "Dribbling basketball"
     root_dir = "Z:/Upper Body/Events/"
-    results_path = "Z:/Upper Body/Results/10 Participants"
-    
-    # IMU feature engineering algorithm outputting the final feature set and associated labels
-    X_imu_top100, y_imu = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="IMU")
-    # Kinematics feature engineering algorithm outputting the final feature set and associated labels
-    X_kin_top100, y_kin = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="Kinematics")
+    results_base = "Z:/Upper Body/Results/10 Participants"
 
-    # Train and test Random Forest Classifier model using top-100 features from both IMU and kinematics
-    clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, results_path)
+    # Get all event names from the enum
+    events = list(EventWindowSize.events.value.keys())
 
-    # Export model
-    UpperBodyClassifier.export_model(clf, results_path, event)
+    # Run jobs in parallel (one process per CPU by default)
+    outputs = Parallel(n_jobs=-1)(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
+
+    for out in outputs:
+        print(out)
