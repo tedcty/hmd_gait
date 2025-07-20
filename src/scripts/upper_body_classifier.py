@@ -5,7 +5,8 @@ from enum import Enum
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
-from tsfresh.feature_extraction import extract_features, ComprehensiveFCParameters
+from tsfresh import extract_features
+from tsfresh.feature_extraction import ComprehensiveFCParameters
 from tsfresh.transformers import FeatureSelector
 from tsfresh.utilities.dataframe_functions import roll_time_series
 from sklearn.ensemble import RandomForestClassifier
@@ -14,13 +15,6 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
-import warnings
-
-warnings.filterwarnings(
-    "ignore",
-    message="DataFrameGroupBy.apply operated on the grouping columns.*",
-    category=FutureWarning
-)
 
 
 class UpperBodyClassifier:
@@ -146,6 +140,11 @@ class UpperBodyClassifier:
             var_name='kind',
             value_name='value'
         )
+        # Downcast DataFrame before rolling, to shrink each column's memory
+        df_melted['id'] = df_melted['id'].astype('category')
+        df_melted['kind'] = df_melted['kind'].astype('category')
+        df_melted['time'] = df_melted['time'].astype(np.float32)
+        df_melted['value'] = df_melted['value'].astype(np.float32)
         # Create rolling windows (each becomes its own sub-series)
         df_rolled = roll_time_series(
             df_melted, 
@@ -155,7 +154,8 @@ class UpperBodyClassifier:
             rolling_direction=1,
             max_timeshift=window_size-1,
             min_timeshift=window_size-1,
-            n_jobs=1
+            n_jobs=1,
+            chunksize=2000
         )
         # Extract features using tsfresh
         X_feat = extract_features(
@@ -165,7 +165,8 @@ class UpperBodyClassifier:
             column_kind='kind',
             column_value='value',
             default_fc_parameters=ComprehensiveFCParameters(),
-            n_jobs=1
+            n_jobs=1,
+            chunksize=2000
         )
         # Majority-vote labels for each window
         y_idx = []
