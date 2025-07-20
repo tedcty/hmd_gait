@@ -132,6 +132,8 @@ class UpperBodyClassifier:
         # Merge y labels into the data
         df = data.copy()
         df['y'] = y
+        # Downcast the numeric columns to save memory
+        df['time'] = df['time'].astype(np.float32)
         # Pick window size based on event type from EventWindowSize
         window_size = EventWindowSize.events.value[event]
         # Melt to long format for tsfresh
@@ -140,9 +142,7 @@ class UpperBodyClassifier:
             var_name='kind',
             value_name='value'
         )
-        # Downcast DataFrame before rolling, to shrink each column's memory
-        df_melted['id'] = df_melted['id'].astype('category')
-        df_melted['kind'] = df_melted['kind'].astype('category')
+        # Downcast melted values of DataFrame before rolling
         df_melted['time'] = df_melted['time'].astype(np.float32)
         df_melted['value'] = df_melted['value'].astype(np.float32)
         # Create rolling windows (each becomes its own sub-series)
