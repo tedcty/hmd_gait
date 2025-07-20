@@ -5,12 +5,15 @@ from enum import Enum
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
+from tsfresh.feature_extraction import extract_features, ComprehensiveFCParameters
 from tsfresh.transformers import FeatureSelector
+from tsfresh.utilities.dataframe_functions import roll_time_series
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import multiprocessing
 
 
 class UpperBodyClassifier:
@@ -106,48 +109,75 @@ class UpperBodyClassifier:
 
         return labels
     
-    @staticmethod
-    def sliding_window(df, window_size, stride=1):
-        windows = []
-        # Assign a trial index within each id
-        df = df.copy()
-        df['trial'] = df['time'].eq(0).cumsum()
+    # @staticmethod
+    # def sliding_window(df, window_size, stride=1):
+    #     windows = []
+    #     # Assign a trial index within each id
+    #     df = df.copy()
+    #     df['trial'] = df['time'].eq(0).cumsum()
 
-        # Group by 'id' and 'trial'
-        for (id_val, trial_idx), group in df.groupby(['id', 'trial']):
-            group = group.reset_index(drop=True)
-            n = len(group)
-            # For every possible start
-            for start in range(0, n - window_size + 1, stride):
-                w = group.iloc[start:start + window_size].copy()
-                windows.append(w)
-        return windows
+    #     # Group by 'id' and 'trial'
+    #     for (id_val, trial_idx), group in df.groupby(['id', 'trial']):
+    #         group = group.reset_index(drop=True)
+    #         n = len(group)
+    #         # For every possible start
+    #         for start in range(0, n - window_size + 1, stride):
+    #             w = group.iloc[start:start + window_size].copy()
+    #             windows.append(w)
+    #     return windows
     
     @staticmethod
     def feature_extraction(data, y, event):
         # Merge y labels into the data
-        data['y'] = y
+        df = data.copy()
+        df['y'] = y
         # Pick window size based on event type from EventWindowSize
         window_size = EventWindowSize.events.value[event]
-        # Window combined data
-        windows = UpperBodyClassifier.sliding_window(data, window_size, stride=1)
-        # Extract features using tsfresh on each window and at the same time do a majority-vote on y labels
-        feature_dfs = []
-        y_window = {}
-        for window in windows:
-            wid = window['id'].iat[0]
-            # Majority vote on y labels
-            vals = window['y'].to_numpy()
-            # If more than half the samples are 1, then the window is labelled as 1
-            y_window[wid] = int(vals.mean() > 0.5)
-            # Drop y labels from the window
-            X = window.drop(columns=['y'])
-            # Extract features using tsfresh
-            features = MLOperations.extract_features_from_x(X)  # NOTE: Figure out whether 'id' column is right
-            feature_dfs.append(features)
-        # Concatenate into a single DataFrame
-        X_feat = pd.concat(feature_dfs)
-        y_feat = pd.Series(y_window, name='y')
+        # Melt to long format for tsfresh
+        df_melted = df.melt(
+            id_vars=['id', 'time', 'y'],
+            var_name='kind',
+            value_name='value'
+        )
+        # Create rolling windows (each becomes its own sub-series)
+        df_rolled = roll_time_series(
+            df_melted, 
+            column_id='id', 
+            column_sort='time', 
+            column_kind='kind', 
+            rolling_direction=1,
+            max_timeshift=window_size-1,
+            min_timeshift=window_size-1,
+            n_jobs=1
+        )
+        # Extract features using tsfresh
+        X_feat = extract_features(
+            df_rolled,
+            column_id='id',
+            column_sort='time',
+            column_kind='kind',
+            column_value='value',
+            default_fc_parameters=ComprehensiveFCParameters(),
+            n_jobs=1
+        )
+        # Majority-vote labels for each window
+        y_idx = []
+        y_vals = []
+        for (eid, shift) in X_feat.index:
+            # Locate corresponding window in rolled DataFrame
+            window_df = df_rolled.xs((eid, shift), level=('id','timeshift'))
+            # Majority vote: label = 1 if more than half of samples are 1
+            label = int(window_df['y'].mean() > 0.5)
+            y_idx.append((eid, shift))
+            y_vals.append(label)
+
+        y_feat = pd.Series(
+            y_vals,
+            index=pd.MultiIndex.from_tuples(
+                y_idx, names=['id', 'timeshift']
+            ),
+            name='y'
+        )
 
         return X_feat, y_feat
     
@@ -317,8 +347,12 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    # Run jobs in parallel (one process per CPU by default)
-    outputs = Parallel(n_jobs=-1)(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
+    # Detect physical cores
+    physical_cores = multiprocessing.cpu_count() // 2
+    # Reserve 1 core for OS responsiveness
+    n_event_jobs = max(1, physical_cores - 1)
+
+    outputs = Parallel(n_jobs=n_event_jobs)(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
 
     for out in outputs:
         print(out)
