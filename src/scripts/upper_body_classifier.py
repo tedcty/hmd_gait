@@ -14,6 +14,13 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="DataFrameGroupBy.apply operated on the grouping columns.*",
+    category=FutureWarning
+)
 
 
 class UpperBodyClassifier:
