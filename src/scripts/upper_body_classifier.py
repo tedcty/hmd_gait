@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from enum import Enum
-from joblib import dump, Parallel, delayed
+from joblib import dump, Parallel, delayed, parallel_backend
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from tsfresh.transformers import FeatureSelector
@@ -344,8 +344,12 @@ if __name__ == "__main__":
     physical_cores = multiprocessing.cpu_count() // 2
     # Reserve 1 core for OS responsiveness
     n_event_jobs = max(1, physical_cores - 1)
+    print(f"Launching {n_event_jobs} events in parallel (threading backend) ...")
 
-    outputs = Parallel(n_jobs=n_event_jobs)(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
-
-    for out in outputs:
-        print(out)
+    # Use threading backend so logs print in order
+    with parallel_backend('threading', n_jobs=n_event_jobs):
+        results = Parallel(n_jobs=n_event_jobs)(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
+    
+    # Print final messages
+    for msg in results:
+        print(msg)
