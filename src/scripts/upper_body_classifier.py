@@ -141,7 +141,7 @@ class UpperBodyClassifier:
         # Generate windows and extract per-window features
         for (eid, start), w in UpperBodyClassifier.sliding_window(df, window_size):
             # Assign composite id for tsfresh
-            w['id'] = (eid, start)
+            w['id'] = [(eid, start)] * len(w)
             # Extract features from this one window
             Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=1)
             # Collect the first (only) row of Xw
