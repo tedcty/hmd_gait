@@ -153,8 +153,7 @@ class UpperBodyClassifier:
             max_timeshift=window_size-1,
             min_timeshift=window_size-1,
             n_jobs=1,
-            chunksize=1000,
-            disable_progressbar=True
+            chunksize=1000
         )
         # Extract features using tsfresh
         X_feat = extract_features(
@@ -165,8 +164,7 @@ class UpperBodyClassifier:
             column_value='value',
             default_fc_parameters=ComprehensiveFCParameters(),
             n_jobs=1,
-            chunksize=1000,
-            disable_progressbar=True
+            chunksize=1000
         )
         # Majority-vote labels for each (id, timeshift)
         y_idx, y_vals = [], []
