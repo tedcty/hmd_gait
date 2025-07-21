@@ -163,7 +163,7 @@ class UpperBodyClassifier:
             column_kind='kind',
             column_value='value',
             default_fc_parameters=ComprehensiveFCParameters(),
-            n_jobs=1,
+            n_jobs=4,
             chunksize=1000
         )
         # Majority-vote labels for each (id, timeshift)
@@ -362,12 +362,12 @@ if __name__ == "__main__":
 
     # Detect physical cores
     physical_cores = multiprocessing.cpu_count() // 2
-    # Reserve 1 core for OS responsiveness
-    n_event_jobs = max(1, physical_cores - 1)
-    print(f"Launching {n_event_jobs} events in parallel (threading backend) ...")
+    inner_jobs = 4
+    outer_jobs = max(1, physical_cores - inner_jobs)  # Ensure outer + inner <= cores
+    print(f"Launching {outer_jobs} events in parallel. with {inner_jobs} feature threads each ...")
 
     # Use threading backend so logs print in order
-    with parallel_backend('threading', n_jobs=n_event_jobs):
+    with parallel_backend('threading', n_jobs=outer_jobs):
         results = Parallel()(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
     
     # Print final messages
