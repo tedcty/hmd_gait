@@ -269,23 +269,33 @@ class UpperBodyPipeline:
 
     @staticmethod
     def process_event(event, root_dir, results_base):
+        
+        print(f"\n=== Starting EVENT: {event} ===")
+
         # Build a results folder per event
         safe_name = event.replace(" ", "_")
         results_dir = os.path.join(results_base, safe_name)
         os.makedirs(results_dir, exist_ok=True)
 
         # IMU feature engineering algorithm outputting the final feature set and associated labels
+        print(f"[{event}] --> Loading IMU data ...")
         X_imu_top100, y_imu = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="IMU")
+        print(f"[{event}] --> IMU feature matrix: {X_imu_top100.shape}, labels: {y_imu.shape}")
         
         # Kinematics feature engineering algorithm outputting the final feature set and associated labels
+        print(f"[{event}] --> Loading kinematics data ...")
         X_kin_top100, y_kin = UpperBodyClassifier.feature_engineering(event, root_dir, datatype="Kinematics")
+        print(f"[{event}] --> Kinematics feature matrix: {X_kin_top100.shape}, labels: {y_kin.shape}")
 
         # Train and test Random Forest Classifier model using top-100 features from both IMU and kinematics
+        print(f"[{event}] --> Training & testing classifier ...")
         clf = UpperBodyClassifier.train_and_test_classifier(X_imu_top100, X_kin_top100, y_imu, y_kin, results_dir)
 
         # Export the final model
         UpperBodyClassifier.export_model(clf, results_dir, event)
+        print(f"[{event}] --> Classifier trained and saved.")
 
+        print(f"=== Finished EVENT: {event} ===\n")
         return f"{event} done."
 
 
