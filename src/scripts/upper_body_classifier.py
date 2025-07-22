@@ -357,8 +357,7 @@ class EventWindowSize(Enum):
         "Step over cone": 160
     }
 
-
-if __name__ == "__main__":
+def main():
     from multiprocessing import freeze_support
     freeze_support()
 
@@ -394,3 +393,7 @@ if __name__ == "__main__":
 
     client.close()
     cluster.close()
+
+
+if __name__ == "__main__":
+    main()
