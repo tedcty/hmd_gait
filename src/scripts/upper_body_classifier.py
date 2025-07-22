@@ -368,7 +368,8 @@ def main():
         processes=False,
         n_workers=4,
         threads_per_worker=1,
-        memory_limit="8GB"
+        memory_limit="8GB",
+        nanny=False
     )
     client = Client(cluster)
 
