@@ -2,9 +2,8 @@ import os
 import pandas as pd
 import numpy as np
 import dask.dataframe as dd
-from dask.distributed import Client, LocalCluster
 from enum import Enum
-from joblib import dump, Parallel, delayed, parallel_backend
+from joblib import dump
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from tsfresh import extract_features
@@ -17,15 +16,6 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
-
-
-# Set up local Dask cluster for out-of-core feature extraction
-cluster = LocalCluster(
-    n_workers=4,
-    threads_per_worker=1,
-    memory_limit="8GB"
-)
-client = Client(cluster)
 
 
 class UpperBodyClassifier:
@@ -370,12 +360,37 @@ class EventWindowSize(Enum):
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
+    from dask.distributed import LocalCluster, Client
+
+    # Set up local Dask cluster for out-of-core feature extraction
+    cluster = LocalCluster(
+        n_workers=4,
+        threads_per_worker=1,
+        memory_limit="8GB",
+        dashboard_address=":0"
+    )
+    client = Client(cluster)
+
+    # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
     results_base = "Z:/Upper Body/Results/10 Participants"
 
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    # Dask handling parallelism inside feature_extraction
-    for ev in events:
-        print(UpperBodyPipeline.process_event(ev, root_dir, results_base))
+    # Launch jobs via joblib and Dask backend
+    from joblib import Parallel, delayed, parallel_backend
+    print(f"Launching {len(events)} events in parallel via Dask ...")
+    with parallel_backend("dask"):
+        results = Parallel()(
+            delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base)
+            for ev in events
+        )
+
+    for r in results:
+        print(r)
+
+    client.close()
+    cluster.close()
