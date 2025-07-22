@@ -15,7 +15,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
 import matplotlib.pyplot as plt
 import seaborn as sns
-import multiprocessing
 
 
 class UpperBodyClassifier:
@@ -360,7 +359,8 @@ class EventWindowSize(Enum):
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
+    from multiprocessing import freeze_support
+    freeze_support()
 
     from dask.distributed import LocalCluster, Client
 
