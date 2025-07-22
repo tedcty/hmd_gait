@@ -365,10 +365,10 @@ def main():
 
     # Set up local Dask cluster for out-of-core feature extraction
     cluster = LocalCluster(
+        processes=False,
         n_workers=4,
         threads_per_worker=1,
-        memory_limit="8GB",
-        dashboard_address=":0"
+        memory_limit="8GB"
     )
     client = Client(cluster)
 
