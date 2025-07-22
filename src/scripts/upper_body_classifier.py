@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import dask.dataframe as dd
 from enum import Enum
-from joblib import dump
+from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from tsfresh import extract_features
@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import multiprocessing
 
 
 class UpperBodyClassifier:
@@ -110,23 +111,23 @@ class UpperBodyClassifier:
 
         return labels
     
-    # @staticmethod
-    # def sliding_window(df, window_size, stride=1):
-    #     windows = []
-    #     # Assign a trial index within each id
-    #     df = df.copy()
-    #     df['trial'] = df['time'].eq(0).cumsum()
+    @staticmethod
+    def sliding_window(df, window_size, stride=1):
+        windows = []
+        # Assign a trial index within each id
+        df = df.copy()
+        df['trial'] = df['time'].eq(0).cumsum()
 
-    #     # Group by original 'id' and 'trial'
-    #     for (eid, trial_idx), group in df.groupby(['id', 'trial']):
-    #         group = group.reset_index(drop=True)
-    #         n = len(group)
-    #         # Slide the window
-    #         for start in range(0, n - window_size + 1, stride):
-    #             w = group.iloc[start:start + window_size].copy()
-    #             window_id = (eid, start)
-    #             windows.append((window_id, w))
-    #     return windows
+        # Group by original 'id' and 'trial'
+        for (eid, _), group in df.groupby(['id', 'trial']):
+            group = group.reset_index(drop=True)
+            n = len(group)
+            # Slide the window
+            for start in range(0, n - window_size + 1, stride):
+                w = group.iloc[start:start + window_size].copy()
+                window_id = (eid, start)
+                windows.append((window_id, w))
+        return windows
     
     @staticmethod
     def feature_extraction(data, y, event):
@@ -137,53 +138,27 @@ class UpperBodyClassifier:
         # Pick window size based on event type from EventWindowSize
         window_size = EventWindowSize.events.value[event]
         
-        # Melt to long format for tsfresh
-        df_melted = df.melt(
-            id_vars=['id', 'time', 'y'],
-            var_name='kind',
-            value_name='value'
-        )
-        # Create rolling windows (each becomes its own sub-series)
-        df_rolled = roll_time_series(
-            df_melted, 
-            column_id='id', 
-            column_sort='time', 
-            column_kind='kind', 
-            rolling_direction=1,
-            max_timeshift=window_size-1,
-            min_timeshift=window_size-1,
-            n_jobs=1,
-            chunksize=250
-        )
-        # Saved rolled windows to Parquet for Dask
-        tmp_dir = f"/tmp/rolled_{event}.parquet"
-        df_rolled.to_parquet(tmp_dir, engine='pyarrow', partition_cols=['id'])
-        # Dask: read Parquet and extract features
-        ddf = dd.read_parquet(tmp_dir)
-        # Extract features using tsfresh
-        X_dask = extract_features(
-            ddf,
-            column_id='id',
-            column_sort='time',
-            column_kind='kind',
-            column_value='value',
-            default_fc_parameters=ComprehensiveFCParameters(),
-            pivot=False
-        )
-        X_feat = X_dask.compute()
-        # Majority-vote labels for each (id, timeshift)
-        y_idx, y_vals = [], []
-        for (eid, shift), group in df_rolled.groupby(level=['id', 'timeshift']):
+        features, idx, y_vals = [], [], []
+        for (eid, start), w in UpperBodyClassifier.sliding_window(df, window_size):
+            w = w.reset_index(drop=True)
+            # Tag every row with window composite id
+            w["id"] = [(eid, start)] * len(w)
+            # Feature extraction
+            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=1)
+            features.append(Xw.iloc[0])
             # Majority vote: label = 1 if more than half of samples are 1
-            label = int(group['y'].mean() > 0.5)
-            y_idx.append((eid, shift))
+            label = int(w['y'].mean() > 0.5)
+            idx.append((eid, start))
             y_vals.append(label)
+
+        X_feat = pd.DataFrame(
+            features,
+            index=pd.MultiIndex.from_tuples(idx, names=["id", "start"])
+        )
 
         y_feat = pd.Series(
             y_vals,
-            index=pd.MultiIndex.from_tuples(
-                y_idx, names=['id', 'timeshift']
-            ),
+            index=X_feat.index,
             name='y'
         )
 
@@ -357,22 +332,8 @@ class EventWindowSize(Enum):
         "Step over cone": 160
     }
 
-def main():
-    from multiprocessing import freeze_support
-    from dask.distributed import LocalCluster, Client
-    from joblib import Parallel, delayed, parallel_backend
-    freeze_support()
 
-    # Set up local Dask cluster for out-of-core feature extraction
-    cluster = LocalCluster(
-        processes=False,
-        n_workers=4,
-        threads_per_worker=1,
-        memory_limit="8GB",
-        nanny=False
-    )
-    client = Client(cluster)
-
+if __name__ == "__main__":
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
     results_base = "Z:/Upper Body/Results/10 Participants"
@@ -380,20 +341,11 @@ def main():
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    # Launch jobs via joblib and Dask backend
-    print(f"Launching {len(events)} events in parallel via Dask ...")
-    with parallel_backend("dask"):
-        results = Parallel()(
-            delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base)
-            for ev in events
-        )
+    cores = max(1, multiprocessing.cpu_count()//2-1)
+    outputs = Parallel(n_jobs=1)(
+        delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base)
+        for ev in events
+    )
 
-    for r in results:
-        print(r)
-
-    client.close()
-    cluster.close()
-
-
-if __name__ == "__main__":
-    main()
+    for o in outputs:
+        print(o)
