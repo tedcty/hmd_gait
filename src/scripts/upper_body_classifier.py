@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 import numpy as np
+import dask.dataframe as dd
+from dask.distributed import Client, LocalCluster
 from enum import Enum
 from joblib import dump, Parallel, delayed, parallel_backend
 from ptb.ml.ml_util import MLOperations
@@ -15,6 +17,15 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
+
+
+# Set up local Dask cluster for out-of-core feature extraction
+cluster = LocalCluster(
+    n_workers=4,
+    threads_per_worker=1,
+    memory_limit="8GB"
+)
+client = Client(cluster)
 
 
 class UpperBodyClassifier:
@@ -155,17 +166,22 @@ class UpperBodyClassifier:
             n_jobs=1,
             chunksize=250
         )
+        # Saved rolled windows to Parquet for Dask
+        tmp_dir = f"/tmp/rolled_{event}.parquet"
+        df_rolled.to_parquet(tmp_dir, engine='pyarrow', partition_cols=['id'])
+        # Dask: read Parquet and extract features
+        ddf = dd.read_parquet(tmp_dir)
         # Extract features using tsfresh
-        X_feat = extract_features(
-            df_rolled,
+        X_dask = extract_features(
+            ddf,
             column_id='id',
             column_sort='time',
             column_kind='kind',
             column_value='value',
             default_fc_parameters=ComprehensiveFCParameters(),
-            n_jobs=4,
-            chunksize=250
+            pivot=False
         )
+        X_feat = X_dask.compute()
         # Majority-vote labels for each (id, timeshift)
         y_idx, y_vals = [], []
         for (eid, shift), group in df_rolled.groupby(level=['id', 'timeshift']):
@@ -360,16 +376,6 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    # Detect physical cores
-    physical_cores = multiprocessing.cpu_count() // 2
-    inner_jobs = 4
-    outer_jobs = max(1, physical_cores - inner_jobs)  # Ensure outer + inner <= cores
-    print(f"Launching {outer_jobs} events in parallel. with {inner_jobs} feature threads each ...")
-
-    # Use threading backend so logs print in order
-    with parallel_backend('threading', n_jobs=outer_jobs):
-        results = Parallel()(delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base) for ev in events)
-    
-    # Print final messages
-    for msg in results:
-        print(msg)
+    # Dask handling parallelism inside feature_extraction
+    for ev in events:
+        print(UpperBodyPipeline.process_event(ev, root_dir, results_base))
