@@ -144,7 +144,7 @@ class UpperBodyClassifier:
             # Tag every row with window composite id
             w["id"] = [(eid, start)] * len(w)
             # Feature extraction
-            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=1)
+            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=3)
             features.append(Xw.iloc[0])
             # Majority vote: label = 1 if more than half of samples are 1
             label = int(w['y'].mean() > 0.5)
@@ -342,7 +342,7 @@ if __name__ == "__main__":
     events = list(EventWindowSize.events.value.keys())
 
     cores = max(1, multiprocessing.cpu_count()//2-1)
-    outputs = Parallel(n_jobs=1)(
+    outputs = Parallel(n_jobs=cores)(
         delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base)
         for ev in events
     )
