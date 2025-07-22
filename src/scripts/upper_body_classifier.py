@@ -359,9 +359,9 @@ class EventWindowSize(Enum):
 
 def main():
     from multiprocessing import freeze_support
-    freeze_support()
-
     from dask.distributed import LocalCluster, Client
+    from joblib import Parallel, delayed, parallel_backend
+    freeze_support()
 
     # Set up local Dask cluster for out-of-core feature extraction
     cluster = LocalCluster(
@@ -380,7 +380,6 @@ def main():
     events = list(EventWindowSize.events.value.keys())
 
     # Launch jobs via joblib and Dask backend
-    from joblib import Parallel, delayed, parallel_backend
     print(f"Launching {len(events)} events in parallel via Dask ...")
     with parallel_backend("dask"):
         results = Parallel()(
