@@ -341,7 +341,7 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    cores = max(1, multiprocessing.cpu_count()//2-1)
+    cores = 2
     outputs = Parallel(n_jobs=cores)(
         delayed(UpperBodyPipeline.process_event)(ev, root_dir, results_base)
         for ev in events
