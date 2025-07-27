@@ -144,7 +144,7 @@ class UpperBodyClassifier:
             # Tag every row with window composite id
             w["id"] = [(eid, start)] * len(w)
             # Feature extraction
-            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=3)
+            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=1)
             features.append(Xw.iloc[0])
             # Majority vote: label = 1 if more than half of samples are 1
             label = int(w['y'].mean() > 0.5)
