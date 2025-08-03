@@ -38,8 +38,10 @@ class UpperBodyClassifier:
                         for col in cols_to_filter:
                             imu_df[col] = Butterworth.butter_low_filter(imu_df[col], cut=6, fs=100, order=4)
                         # Append to the main DataFrame with filename under new 'id' column
-                        # Extract id: remove the suffix
-                        id_str = file.replace('_imu_vec3_2_raw.csv', '')
+                        # Extract sensor id
+                        for imu in UpperBodyIMU:
+                            if imu.value in file:
+                                id_str = f"{imu.value}_imu"
                         imu_df['id'] = id_str
                         # Reorder columns to make 'id' the first column
                         cols = ['id'] + [col for col in imu_df.columns if col != 'id']
@@ -68,13 +70,12 @@ class UpperBodyClassifier:
                         for col in cols_to_filter:
                             kinematics_df[col] = Butterworth.butter_low_filter(kinematics_df[col], cut=6, fs=100, order=4)
                         # Extract id: remove the suffix
-                        id_str = file.replace('.mot.csv', '')
+                        id_str = 'kinematics'
                         kinematics_df['id'] = id_str
                         # Keep only time and upper body kinematics columns
                         cols_to_keep = ['time'] + [c for c in kin_cols if c in kinematics_df.columns]
                         kinematics_df = kinematics_df[cols_to_keep].copy()
                         # Reorder columns to make 'id' the first column
-                        kinematics_df['id'] = id_str
                         kinematics_df = kinematics_df[['id'] + cols_to_keep]
 
                         yield kinematics_df
