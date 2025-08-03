@@ -5,6 +5,9 @@ from enum import Enum
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
+from tsfresh import extract_features
+from tsfresh.utilities.dataframe_functions import impute
+from tsfresh.feature_extraction import MinimalFCParameters
 from tsfresh.transformers import FeatureSelector
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -136,7 +139,11 @@ class UpperBodyClassifier:
             # Tag every row with window composite id
             w["id"] = [(eid, start)] * len(w)
             # Feature extraction
-            Xw, _ = MLOperations.extract_features_from_x(w)
+            # NOTE: Running MinimalFCParameters (only for testing)
+            Xw = extract_features(w, column_id='id', column_sort='time',
+                     default_fc_parameters=MinimalFCParameters(),
+                     impute_function=impute)
+            # Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=1)
             features.append(Xw.iloc[0])
             # Majority vote: label = 1 if more than 80% of samples are 1
             label = int(w['y'].mean() > 0.8)
@@ -304,16 +311,16 @@ class UpperBodyKinematics(Enum):
 
 class UpperBodyIMU(Enum):
     head = "Head"
-    left_forearm = "LeftForeArm"
-    right_forearm = "RightForeArm"
-    left_hand = "LeftHand"
-    right_hand = "RightHand"
-    left_shoulder = "LeftShoulder"
-    right_shoulder = "RightShoulder"
-    left_upper_arm = "LeftUpperArm"
-    right_upper_arm = "RightUpperArm"
-    pelvis = "Pelvis"
-    sternum = "T8"
+    # left_forearm = "LeftForeArm"
+    # right_forearm = "RightForeArm"
+    # left_hand = "LeftHand"
+    # right_hand = "RightHand"
+    # left_shoulder = "LeftShoulder"
+    # right_shoulder = "RightShoulder"
+    # left_upper_arm = "LeftUpperArm"
+    # right_upper_arm = "RightUpperArm"
+    # pelvis = "Pelvis"
+    # sternum = "T8"
 
 
 class EventWindowSize(Enum):
@@ -337,15 +344,25 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    cores = 2
-    outputs = Parallel(n_jobs=cores)(
-        delayed(UpperBodyPipeline.process_event)(
-            ev, 
-            root_dir, 
-            f"Z:/Upper Body/Results/10 Participants/{datatype}")
-        for ev in events
-        for datatype in datatypes
-    )
-
-    for o in outputs:
-        print(o)
+    # Use 1 core for feature extraction and 2 cores for parallel event processing NOTE: Change when using Precision PC
+    cores = min(2, multiprocessing.cpu_count() - 1)  # Leave 1 core free for system
+    
+    # Process one datatype at a time to reduce memory usage
+    for datatype in datatypes:
+        print(f"\nProcessing {datatype} data...")
+        outputs = Parallel(n_jobs=cores)(
+            delayed(UpperBodyPipeline.process_event)(
+                ev, 
+                root_dir, 
+                datatype,
+                f"Z:/Upper Body/Results/10 Participants/{datatype}"
+            )
+            for ev in events
+        )
+        
+        # Clear memory between datatypes
+        import gc
+        gc.collect()
+        
+        for o in outputs:
+            print(o)
