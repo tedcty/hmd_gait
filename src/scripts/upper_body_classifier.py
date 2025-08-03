@@ -125,7 +125,7 @@ class UpperBodyClassifier:
         return windows
     
     @staticmethod
-    def feature_extraction(data, y, event):
+    def feature_extraction(data, y, event, n_jobs):
         # Merge y labels into the data
         df = data.copy()
         df['y'] = y
@@ -139,11 +139,7 @@ class UpperBodyClassifier:
             # Tag every row with window composite id
             w["id"] = [(eid, start)] * len(w)
             # Feature extraction
-            # NOTE: Running MinimalFCParameters (only for testing)
-            Xw = extract_features(w, column_id='id', column_sort='time',
-                     default_fc_parameters=MinimalFCParameters(),
-                     impute_function=impute)
-            # Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=1)
+            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=n_jobs)
             features.append(Xw.iloc[0])
             # Majority vote: label = 1 if more than 80% of samples are 1
             label = int(w['y'].mean() > 0.8)
@@ -246,12 +242,14 @@ class UpperBodyClassifier:
             data_iter = UpperBodyClassifier.upper_body_imu_for_event(event, os.path.join(root_dir, datatype))
         elif datatype == "Kinematics":
             data_iter = UpperBodyClassifier.upper_body_kinematics_for_event(event, os.path.join(root_dir, datatype))
+        # Get number of jobs for feature extraction
+        n_jobs_features = max(1, (multiprocessing.cpu_count() - 2) // 2)        
         # Process each trial
         for i, trial_df in enumerate(data_iter):
             # Get labels for this trial
             y = UpperBodyClassifier.y_label_column(trial_df)           
             # Extract features from windowed data
-            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event)            
+            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_jobs_features)            
             # Save intermediate features
             feat_file = os.path.join(feat_dir, f"trial_{i}_features.parquet")
             X_feat.to_parquet(feat_file)            
@@ -344,25 +342,49 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    # Use 1 core for feature extraction and 2 cores for parallel event processing NOTE: Change when using Precision PC
-    cores = min(2, multiprocessing.cpu_count() - 1)  # Leave 1 core free for system
+    # Reserve 2 cores for system stability, use remaining cores for processing
+    total_cores = multiprocessing.cpu_count()
+    cores = max(1, total_cores - 2)  # Use all cores except 2 for system
+
+    # Set parallel jobs for feature extraction
+    n_jobs_features = max(1, cores // 2)  # Use half of available cores for feature extraction
     
-    # Process one datatype at a time to reduce memory usage
+    print(f"System has {total_cores} cores. Using {cores} cores for processing, {n_jobs_features} for feature extraction.")
+    
+    # Process one datatype at a time to manage memory
     for datatype in datatypes:
         print(f"\nProcessing {datatype} data...")
-        outputs = Parallel(n_jobs=cores)(
-            delayed(UpperBodyPipeline.process_event)(
-                ev, 
-                root_dir, 
-                datatype,
-                f"Z:/Upper Body/Results/10 Participants/{datatype}"
+        try:
+            outputs = Parallel(n_jobs=cores, prefer="threads")(
+                delayed(UpperBodyPipeline.process_event)(
+                    ev, 
+                    root_dir, 
+                    datatype,
+                    f"Z:/Upper Body/Results/10 Participants/{datatype}"
+                )
+                for ev in events
             )
-            for ev in events
-        )
-        
-        # Clear memory between datatypes
-        import gc
-        gc.collect()
-        
-        for o in outputs:
-            print(o)
+            
+            # Force garbage collection between datatypes
+            import gc
+            gc.collect()
+            
+            for o in outputs:
+                print(o)
+                
+        except MemoryError:
+            print(f"Memory error encountered. Reducing parallel processing...")
+            # Fallback to fewer cores if memory error occurs
+            cores_fallback = max(1, cores // 2)
+            outputs = Parallel(n_jobs=cores_fallback, prefer="threads")(
+                delayed(UpperBodyPipeline.process_event)(
+                    ev, 
+                    root_dir, 
+                    datatype,
+                    f"Z:/Upper Body/Results/10 Participants/{datatype}"
+                )
+                for ev in events
+            )
+            
+            for o in outputs:
+                print(o)
