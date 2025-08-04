@@ -286,7 +286,7 @@ class UpperBodyPipeline:
 
         # IMU feature engineering algorithm outputting the final feature set and associated labels
         print(f"[{event}] --> Loading {datatype} data ...")
-        X_top100, y = UpperBodyClassifier.feature_engineering(event, root_dir, datatype)
+        X_top100, y = UpperBodyClassifier.feature_engineering(event, root_dir, datatype, results_dir)
         print(f"[{event}] --> {datatype} feature matrix: {X_top100.shape}, labels: {y.shape}")
 
         # Train and test Random Forest Classifier model using top-100 features
