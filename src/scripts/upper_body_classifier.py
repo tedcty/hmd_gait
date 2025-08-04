@@ -224,11 +224,11 @@ class UpperBodyClassifier:
     
     @staticmethod
     def export_model(clf, results_path, event):
-        model_path = os.path.join(results_path, f"{event}_rf_classifier.pkl")
+        model_path = os.path.join(results_path, f"{datatype}_{event}_rf_classifier.pkl")
         dump(clf, model_path)
 
     @staticmethod
-    def feature_engineering(event, root_dir, datatype):
+    def feature_engineering(event, root_dir, datatype, results_dir):
         # Combine all functions involving DataFrame creation, feature extraction and selection
 
         # Folder directory for intermediate features
@@ -265,7 +265,8 @@ class UpperBodyClassifier:
         # Pick the top-100 features by importance
         top100 = MLOperations.select_top_features_from_x(X_sel["feature_importance"], num_of_feat=100)
         # Export IMU top features with importances to JSON
-        UpperBodyClassifier.export_features_with_importance(X_sel, top100, filepath=f"Z:/Upper Body/Results/10 Participants/{datatype}_top100_features.json")
+        final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
+        UpperBodyClassifier.export_features_with_importance(X_sel, top100, results_path=final_feat_path)
         print(f"Found Top 100 {datatype} features by importance.")
 
         return X_sel["X_selected"][top100["pfx"]], y_combined
