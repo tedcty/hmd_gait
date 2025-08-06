@@ -141,8 +141,8 @@ class UpperBodyClassifier:
             # Feature extraction
             Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=n_jobs)
             features.append(Xw.iloc[0])
-            # Majority vote: label = 1 if more than 80% of samples are 1
-            label = int(w['y'].mean() > 0.8)
+            # Majority vote: label = 1 if more than 60% of samples are 1
+            label = int(w['y'].mean() > 0.6)
             idx.append((eid, start))
             y_vals.append(label)
 
@@ -259,6 +259,8 @@ class UpperBodyClassifier:
         # Combine all features
         X_combined = pd.concat(all_features, axis=0)
         y_combined = pd.concat(all_labels, axis=0)
+        if y_combined.nunique() < 2:
+            raise RuntimeError("Labelling produces a single class. Check threshold and window size settings.")
         # Select features by hypothesis testing (tsfresh)
         X_sel = UpperBodyClassifier.feature_selection(X_combined, y_combined)
         print(f"{datatype} features selected by hypothesis testing.")
