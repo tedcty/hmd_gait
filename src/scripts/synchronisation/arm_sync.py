@@ -5,14 +5,14 @@ import matplotlib.pyplot as plt
 from ptb.util.math.filters import Butterworth
 
 if __name__ == '__main__':
-    participant_id = 'P026' # NOTE: Replace with the actual participant ID
-    session_id = 'Combo vr 01' # NOTE: Replace with the actual session ID
+    participant_id = 'P043' # NOTE: Replace with the actual participant ID
+    session_id = 'straight VR 1' # NOTE: Replace with the actual session ID
 
     # Read both IMUs and kinematic data
     # NOTE: Change to left leg if needed
     time1, rolls1, pitches1, yaws1 = read_euler_angles('LeftUpperArm', participant_id, session_id)
     time2, rolls2, pitches2, yaws2 = read_euler_angles('T8', participant_id, session_id)  # sternum
-    time_kin, knee_angles = read_kinematic_data('arm_add_l', participant_id, session_id)
+    time_kin, arm_add_angles = read_kinematic_data('arm_add_l', participant_id, session_id)
 
     # Ensure both IMU arrays are the same length
     min_len = min(len(time1), len(time2))
@@ -21,11 +21,11 @@ if __name__ == '__main__':
     pitch_diff = pitches1[:min_len] - pitches2[:min_len]
     yaw_diff = yaws1[:min_len] - yaws2[:min_len]
 
-    # # Apply Butterworth low-pass filter to the pitch difference and knee angles
-    # pitch_diff = Butterworth.butter_low_filter(data=pitch_diff, fs=100, cut=3)
-    # # pitch_diff = pitch_diff / np.max(np.abs(pitch_diff))
-    # knee_angles = Butterworth.butter_low_filter(data=knee_angles, fs=100, cut=3)
-    # # knee_angles = knee_angles / np.max(np.abs(knee_angles))
+    # Apply Butterworth low-pass filter to the pitch difference and arm adduction angles
+    pitch_diff = Butterworth.butter_low_filter(data=pitch_diff, fs=100, cut=3)
+    # pitch_diff = pitch_diff / np.max(np.abs(pitch_diff))
+    arm_add_angles = Butterworth.butter_low_filter(data=arm_add_angles, fs=100, cut=3)
+    # arm_add_angles = arm_add_angles / np.max(np.abs(arm_add_angles))
 
     # Initial plots
     ig, axs = plt.subplots(1, 2, figsize=(14,6))
@@ -33,7 +33,7 @@ if __name__ == '__main__':
     axs[0].set(xlabel='Time (s)', ylabel='Angle Difference (°)', title='Pitch Difference between IMUs (UpperArm - Sternum)')
     axs[0].legend(); axs[0].grid(True)
 
-    axs[1].plot(time_kin, knee_angles, label='Knee Angle', color='orange')
+    axs[1].plot(time_kin, arm_add_angles, label='Arm Adduction Angle', color='orange')
     axs[1].set(xlabel='Time (s)', ylabel='Arm Adduction Angle (°)', title='Arm Adduction Over Time')
     axs[1].legend(); axs[1].grid(True)
 
@@ -45,17 +45,29 @@ if __name__ == '__main__':
         print("Exiting. Inspect plots and rerun.")
         exit()
 
+    h_imu = np.max(np.abs(pitch_diff)) * 0.6  # Threshold for IMU pitch difference
+    h_kin = np.max(np.abs(arm_add_angles)) * 0.6  # Threshold for kinematic arm adduction angle
+    
     # Find peaks from arm raise during T-pose at the start and end of the session
-    peaks_imu, _ = find_peaks(-pitch_diff, height=30, distance=10)
-    peaks_kin, _ = find_peaks(-knee_angles, height=np.max(np.abs(knee_angles)) * 0.8, distance=10)
+    peaks_imu, _ = find_peaks(-pitch_diff, height=h_imu, distance=10)
+    # # Force‐in dips at the very start or end if they exceed the same threshold
+    # if pitch_diff[0]  < -h_imu:      # a trough deeper than –h_imu at t=0
+    #     peaks_imu = np.insert(peaks_imu, 0, 0)
+    # if pitch_diff[-1] < -h_imu:
+    #     peaks_imu = np.append(peaks_imu, len(pitch_diff)-1)
+    if len(peaks_imu) > 1:
+        # Ensure we only keep the first and last peaks
+        peaks_imu = peaks_imu[[0, -1]]
 
-    # Get the very first and last peaks
-    if len(peaks_imu) >= 2 and len(peaks_kin) >= 2:
-        peaks_imu = np.array([peaks_imu[0], peaks_imu[-1]])
-        peaks_kin = np.array([peaks_kin[0], peaks_kin[-1]])
-    # else:
-    #     print("Not enough peaks detected. Ensure the data has sufficient variation.")
-    #     exit()
+    peaks_kin, _ = find_peaks(-arm_add_angles, height=h_kin, distance=10)
+    # # Force‐in dips at the very start or end if they exceed the same threshold
+    # if arm_add_angles[0]  < -h_kin:
+    #     peaks_kin = np.insert(peaks_kin, 0, 0)
+    # if arm_add_angles[-1] < -h_kin:
+    #     peaks_kin = np.append(peaks_kin, len(arm_add_angles)-1)
+    if len(peaks_kin) > 1:
+        # Ensure we only keep the first and last peaks
+        peaks_kin = peaks_kin[[0, -1]]
        
     print("IMU peaks at times:", time[peaks_imu])
     print("Kin peaks at times:", time_kin[peaks_kin])
@@ -67,8 +79,8 @@ if __name__ == '__main__':
     axs[0].set(xlabel='Time (s)', ylabel='Angle Difference (°)', title='Pitch Difference between IMUs (UpperArm - Sternum)')
     axs[0].legend(); axs[0].grid(True)
 
-    axs[1].plot(time_kin, knee_angles, label='Knee Angle', color='orange')
-    axs[1].plot(time_kin[peaks_kin], knee_angles[peaks_kin], 'x')
+    axs[1].plot(time_kin, arm_add_angles, label='Arm Adduction Angle', color='orange')
+    axs[1].plot(time_kin[peaks_kin], arm_add_angles[peaks_kin], 'x')
     axs[1].set(xlabel='Time (s)', ylabel='Arm Adduction Angle (°)', title='Arm Adduction Over Time')
     axs[1].legend(); axs[1].grid(True)
 
@@ -92,7 +104,7 @@ if __name__ == '__main__':
     # Visual check of alignment
     aligned_time_imu = time - mean_offset
     plt.plot(aligned_time_imu, pitch_diff, label='IMU pitch difference')
-    plt.plot(time_kin, knee_angles, label='Arm adduction (shifted)')
+    plt.plot(time_kin, arm_add_angles, label='Arm adduction (shifted)')
     plt.legend(); plt.grid(True)
     plt.title(f'Peak‐based alignment (offset = {mean_offset:.3f}s)')
     plt.show()
@@ -108,7 +120,7 @@ if __name__ == '__main__':
         mask_imu = (time >= t_imu - half_win) & (time <= t_imu + half_win)
         mask_kin = (time_kin >= t_kin - half_win) & (time_kin <= t_kin + half_win)
         seg_imu = pitch_diff[mask_imu]
-        seg_kin = knee_angles[mask_kin]
+        seg_kin = arm_add_angles[mask_kin]
 
         # Upsample both segments
         M = int(len(seg_imu) * 1000 / fs)  # samples at up_fs

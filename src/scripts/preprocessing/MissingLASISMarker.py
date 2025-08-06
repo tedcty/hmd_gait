@@ -1,9 +1,10 @@
 from yatpkg.util.data import TRC
 import numpy as np
+setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 from yatpkg.math.transformation import Cloud
 
-participant_id = "P026"  # Replace with the actual participant ID
-session_id = "Straight Normal 01"  # Replace with the actual session ID
+participant_id = "P011"  # Replace with the actual participant ID
+session_id = "Reactive AR 1_Reconstructed"  # Replace with the actual session ID
 
 # Read in the TRC file
 trc_data = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)  # Add path to specific TRC file
