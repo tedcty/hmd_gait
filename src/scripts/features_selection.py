@@ -14,7 +14,7 @@ from scipy import interpolate
 import ptb
 from ptb.core import Yatsdo
 from ptb.util.io.helper import StorageIO, StorageType, TRC, JSONSUtl
-from ptb.util.gait import Analysis
+from ptb.util.gait.analysis import Analysis
 from ptb.util.math.filters import Butterworth
 from ptb.util.math.transformation import PCAModel, Cloud
 from ptb.ml.ml_util import MLOperations
