@@ -223,7 +223,7 @@ class UpperBodyClassifier:
         return clf
     
     @staticmethod
-    def export_model(clf, results_path, event):
+    def export_model(clf, results_path, event, datatype):
         model_path = os.path.join(results_path, f"{datatype}_{event}_rf_classifier.pkl")
         dump(clf, model_path)
 
@@ -296,7 +296,7 @@ class UpperBodyPipeline:
         clf = UpperBodyClassifier.train_and_test_classifier(X_top100, y, results_dir)
 
         # Export the final model
-        UpperBodyClassifier.export_model(clf, results_dir, event)
+        UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
         print(f"[{event}] --> Classifier trained and saved.")
 
         print(f"=== Finished EVENT: {event} ===\n")
