@@ -291,16 +291,10 @@ class UpperBodyClassifier:
         # Process each trial
         for i, trial_df in enumerate(data_iter):
             # Extract task from the file path
+            file_path = trial_df.index.get_level_values('id')[0]  # Get first id
             try:
-                # For IMU data
-                if datatype == "IMU":
-                    file_path = trial_df['id'].iloc[0]  # Get first id value
-                # For Kinematics data
-                else:
-                    file_path = 'kinematics'  # Always 'kinematics' for kinematic data
-                
-                task = next(t for t in ['Combination', 'Defined', 'Free', 'Obstacles', 'Stairs', 'Straight'] 
-                        if t.lower() in file_path.lower())
+                task = [t for t in ['Combination', 'Defined', 'Free', 'Obstacles', 'Stairs', 'Straight'] 
+                        if t.lower() in file_path.lower()][0]
             except StopIteration:
                 print(f"Warning: Could not determine task from file path: {file_path}")
                 continue
