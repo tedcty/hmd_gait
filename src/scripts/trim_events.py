@@ -2,6 +2,30 @@ import pandas as pd
 import numpy as np
 import os
 from ptb.util.io.helper import StorageIO
+from typing import Dict, Tuple, Set
+from upper_body_classifier import EventWindowSize
+
+
+# Event types
+WHOLE_EVENTS: Set[str] = {
+    "Place ping pong ball in cup",
+    "Pick up basketball",
+    "Put down basketball",
+    "Step over cone"
+}
+REPETITIVE_EVENTS: Set[str] = {
+    "Dribbling basketball",
+    "Straight walk",
+    "Stair up",
+    "Stair down"
+}
+
+# Pull sizes directly from enum
+EVENT_SIZES: Dict[str, int] = EventWindowSize.events.value
+
+# Cache for computed std (samples) per task for whole events
+STD_CACHE: Dict[str, Dict[str, int]] = {}
+
 
 def read_offset_times(file_path):
     # Read offset times Excel file (with a two-level header and PID column as index)
@@ -94,7 +118,35 @@ def sync_imu_with_kinematics(offsets_df):
     return synced
 
 
-def trim_events(df, events_dict, pid, task, cond, time_col='time', pre=0.2, post=0.2, sample_rate=100):
+def compute_whole_event_std(task, events_dict, sample_rate=100):
+    if task in STD_CACHE:
+        return STD_CACHE[task]
+    
+    std_map: Dict[str, int] = {}
+
+    # For each whole event, collect durations across ALL tasks
+    for base_event in WHOLE_EVENTS:
+        all_durations = []
+        # Look through all tasks for this event
+        for task_sheet, event_df in events_dict.items():
+            # Get all columns that start with this event name
+            event_cols = [col[0] for col in event_df.columns if col[0].startswith(base_event)]
+            for event in event_cols:
+                # Get durations directly from Duration column
+                durations = event_df[(event, 'Duration')].dropna().values
+                durations = durations[durations > 0]  # Filter out any non-positive durations
+                all_durations.extend(durations)
+
+        if len(all_durations) > 0:
+            # Convert to samples and get the standard deviation
+            std_samples = np.std(all_durations) * sample_rate
+            std_map[base_event] = std_samples  # Store under base event name
+    
+    STD_CACHE[task] = std_map
+    return std_map
+
+
+def trim_events(df, events_dict, pid, task, cond, time_col='time', sample_rate=100):
     # Grab the event‐labels DataFrame for this task
     event_df = events_dict[task]
     trimmed = {}
@@ -103,29 +155,53 @@ def trim_events(df, events_dict, pid, task, cond, time_col='time', pre=0.2, post
     # Sort once per call
     df_sorted = df.sort_values(time_col).reset_index(drop=True)
 
+    # Get standard deviations for whole events
+    std_map = compute_whole_event_std(task, events_dict, sample_rate)
+
     # Loop through each event
     for event in events:
+        # Get base event name (remove numbering if present)
+        base_event = event.split(' ', 1)[0]  # Get first word
+        for known_event in WHOLE_EVENTS | REPETITIVE_EVENTS:
+            if event.startswith(known_event):
+                base_event = known_event
+                break
         # Check if the event exists for this participant and condition
         raw_start = event_df.loc[(pid, cond), (event, 'Start')]
         raw_end   = event_df.loc[(pid, cond), (event, 'End')]
         if pd.isna(raw_start) or pd.isna(raw_end):
             continue
 
-        # Compute window in seconds
-        start_time = raw_start - pre
-        end_time   = raw_end   + post
+        if base_event in WHOLE_EVENTS:
+            # For whole events, use mean window + std with buffers
+            event_size = EVENT_SIZES[base_event]  # Already in frames
+            std_size = std_map.get(base_event, 0)  # Already in frames
+            # Round the sum to nearest whole number of frames
+            center_window = round(event_size + std_size)  
+            center_window_seconds = center_window / sample_rate
+            
+            # Center the window around the middle of the event
+            event_mid = (raw_start + raw_end) / 2
+            start_time = event_mid - (center_window_seconds / 2) - center_window_seconds  # Left buffer
+            end_time = event_mid + (center_window_seconds / 2) + center_window_seconds    # Right buffer
+            
+        elif event in REPETITIVE_EVENTS:
+            # For repetitive events, keep full duration plus one cycle buffer
+            cycle_size = EVENT_SIZES[event] / sample_rate  # One cycle in seconds
+            start_time = raw_start - cycle_size  # Buffer of one cycle
+            end_time = raw_end + cycle_size      # Buffer of one cycle
 
-        # Convert to sample indices
-        start_idx = int(np.ceil(start_time * sample_rate))
-        end_idx   = int(np.floor(end_time   * sample_rate))
-
+        # Convert to sample indices and ensure within bounds
+        start_idx = max(0, int(np.ceil(start_time * sample_rate)))
+        end_idx = min(len(df_sorted) - 1, int(np.floor(end_time * sample_rate)))
+        
         # Slice by position
-        trimmed[event] = df_sorted.iloc[start_idx : end_idx + 1].copy()
+        trimmed[event] = df_sorted.iloc[start_idx:end_idx + 1].copy()
 
     return trimmed
 
 
-def trim_all_streams(synced_data, events_df, pre=0.2, post=0.2, time_col='time'):
+def trim_all_streams(synced_data, events_df, time_col='time'):
     trimmed = {}
     # Loop through each participant's data in the synced data
     for (pid, task, cond), streams in synced_data.items():
@@ -135,10 +211,10 @@ def trim_all_streams(synced_data, events_df, pre=0.2, post=0.2, time_col='time')
             continue
         print(f"Trimming data for {pid} {task} {cond}")
         # Use the index‐based trim for kinematics and each IMU
-        kin_windows = trim_events(streams['kin'],  events_df, pid, task, cond, time_col=time_col, pre=pre, post=post, sample_rate=100)
+        kin_windows = trim_events(streams['kin'],  events_df, pid, task, cond, time_col=time_col, sample_rate=100)
         imu_windows = {}
         for imu_file, imu_df in streams['imu'].items():
-            imu_windows[imu_file] = trim_events(imu_df, events_df, pid, task, cond, time_col=time_col, pre=pre, post=post, sample_rate=100)
+            imu_windows[imu_file] = trim_events(imu_df, events_df, pid, task, cond, time_col=time_col, sample_rate=100)
         trimmed[(pid, task, cond)] = {'kin': kin_windows, 'imu': imu_windows}
     return trimmed
 
@@ -158,7 +234,7 @@ if __name__ == "__main__":
     print("IMU data synced with kinematics data successfully.")
 
     # Trim all streams from synced data based on the event labels
-    trimmed_data = trim_all_streams(synced_data, events_df, pre=0.2, post=0.2, time_col='time')
+    trimmed_data = trim_all_streams(synced_data, events_df, time_col='time')
     print("All streams trimmed based on event labels successfully.")
 
     # Save the trimmed files

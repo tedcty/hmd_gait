@@ -335,16 +335,15 @@ class UpperBodyIMU(Enum):
 
 
 class EventWindowSize(Enum):
-    # NOTE: Events with window size equal to whole event, sizes were changed from average to minimum
     events = {
         "Straight walk": 110,
         "Stair up": 130,
         "Stair down": 110,
-        "Pick up basketball": 100,  # prev 150
+        "Pick up basketball": 150,
         "Dribbling basketball": 80,
-        "Put down basketball": 110,  # prev 180
-        "Place ping pong ball in cup": 100,  # prev 250
-        "Step over cone": 120  # prev 160
+        "Put down basketball": 180,
+        "Place ping pong ball in cup": 250,
+        "Step over cone": 160
     }
 
 
