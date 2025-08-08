@@ -8,6 +8,8 @@ from event_constants import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES)
 # Cache for computed std (samples) per task for whole events
 STD_CACHE: Dict[str, Dict[str, int]] = {}
 
+STD_CACHE_GLOBAL: Dict[str, int] = {}
+
 
 def read_offset_times(file_path):
     # Read offset times Excel file (with a two-level header and PID column as index)
@@ -98,6 +100,28 @@ def sync_imu_with_kinematics(offsets_df):
             }
     
     return synced
+
+
+def compute_whole_event_std_global(events_dict, sample_rate=100):
+    # Return cached if available
+    if STD_CACHE_GLOBAL:
+        return STD_CACHE_GLOBAL
+
+    std_map: Dict[str, int] = {}
+    for base_event in WHOLE_EVENTS:
+        all_durations = []
+        for _, event_df in events_dict.items():  # iterate every task sheet
+            event_cols = [col[0] for col in event_df.columns if col[0].startswith(base_event)]
+            for event in event_cols:
+                d = event_df[(event, 'Duration')].dropna().values
+                d = d[d > 0]
+                all_durations.extend(d)
+        if all_durations:
+            std_map[base_event] = np.std(all_durations) * sample_rate
+
+    # cache and return
+    STD_CACHE_GLOBAL.update(std_map)
+    return std_map
 
 
 def compute_whole_event_std(task, events_dict, sample_rate=100):
