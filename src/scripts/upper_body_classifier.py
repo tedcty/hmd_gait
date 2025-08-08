@@ -5,6 +5,7 @@ from enum import Enum
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
+from ptb.ml.tags import MLKeys
 from tsfresh import extract_features
 from tsfresh.utilities.dataframe_functions import impute
 from tsfresh.feature_extraction import MinimalFCParameters
@@ -132,30 +133,39 @@ class UpperBodyClassifier:
         
         # Pick window size based on event type from EventWindowSize
         window_size = EventWindowSize.events.value[event]
+
+        # Create lists to store window data
+        windows_data = []
+        window_ids = []
+        y_windows = []
         
-        features, idx, y_vals = [], [], []
         for (eid, start), w in UpperBodyClassifier.sliding_window(df, window_size):
             w = w.reset_index(drop=True)
             # Tag every row with window composite id
-            w["id"] = [(eid, start)] * len(w)
-            # Feature extraction
-            Xw, _ = MLOperations.extract_features_from_x(w, n_jobs=n_jobs)
-            features.append(Xw.iloc[0])
-            # Majority vote: label = 1 if more than 60% of samples are 1
-            label = int(w['y'].mean() > 0.6)
-            idx.append((eid, start))
-            y_vals.append(label)
+            w["id"] = (eid, start)
+            windows_data.append(w)
+            window_ids.append((eid, start))
+            # Majority vote: label = 1 if more than 80% of samples are 1
+            label = int(w['y'].mean() > 0.8)
+            y_windows.append(label)
 
-        X_feat = pd.DataFrame(
-            features,
-            index=pd.MultiIndex.from_tuples(idx, names=["id", "start"])
-        )
+        # Stack all windows into a single DataFrame
+        combined_windows = pd.concat(windows_data, ignore_index=True)
 
-        y_feat = pd.Series(
-            y_vals,
-            index=X_feat.index,
-            name='y'
-        )
+        # Extract features using tsfresh  NOTE: Currently using MinimalFCParameters
+        X_feat, _ = MLOperations.extract_features_from_x(
+            combined_windows,
+            fc_parameters=MLKeys.MFCParameters,
+            n_jobs=n_jobs)
+        
+        # Group features by window id to get one row per window
+        X_feat = X_feat.groupby('id').first().reset_index()
+    
+        # Create final DataFrame with proper index
+        X_feat.index = pd.MultiIndex.from_tuples(window_ids, names=["id", "start"])
+
+        # Create Series for labels
+        y_feat = pd.Series(y_windows, index=X_feat.index, name='y')
 
         return X_feat, y_feat
     
