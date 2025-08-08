@@ -14,7 +14,8 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
-from trim_events import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES, compute_whole_event_std, read_event_labels)
+from event_constants import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES, EventWindowSize)
+from trim_events import compute_whole_event_std, read_event_labels
 
 
 class UpperBodyClassifier:
@@ -373,19 +374,6 @@ class UpperBodyIMU(Enum):
     # right_upper_arm = "RightUpperArm"
     # pelvis = "Pelvis"
     # sternum = "T8"
-
-
-class EventWindowSize(Enum):
-    events = {
-        "Straight walk": 110,
-        "Stair up": 130,
-        "Stair down": 110,
-        "Pick up basketball": 150,
-        "Dribbling basketball": 80,
-        "Put down basketball": 180,
-        "Place ping pong ball in cup": 250,
-        "Step over cone": 160
-    }
 
 
 if __name__ == "__main__":

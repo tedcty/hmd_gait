@@ -2,26 +2,8 @@ import pandas as pd
 import numpy as np
 import os
 from ptb.util.io.helper import StorageIO
-from typing import Dict, Tuple, Set
-from upper_body_classifier import EventWindowSize
-
-
-# Event types
-WHOLE_EVENTS: Set[str] = {
-    "Place ping pong ball in cup",
-    "Pick up basketball",
-    "Put down basketball",
-    "Step over cone"
-}
-REPETITIVE_EVENTS: Set[str] = {
-    "Dribbling basketball",
-    "Straight walk",
-    "Stair up",
-    "Stair down"
-}
-
-# Pull sizes directly from enum
-EVENT_SIZES: Dict[str, int] = EventWindowSize.events.value
+from typing import Dict
+from event_constants import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES)
 
 # Cache for computed std (samples) per task for whole events
 STD_CACHE: Dict[str, Dict[str, int]] = {}
