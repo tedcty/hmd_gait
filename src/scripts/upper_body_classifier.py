@@ -6,9 +6,7 @@ from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from ptb.ml.tags import MLKeys
-from tsfresh import extract_features
 from tsfresh.utilities.dataframe_functions import impute
-from tsfresh.feature_extraction import MinimalFCParameters
 from tsfresh.transformers import FeatureSelector
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -16,6 +14,7 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
+from trim_events import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES, compute_whole_event_std, read_event_labels)
 
 
 class UpperBodyClassifier:
@@ -85,31 +84,65 @@ class UpperBodyClassifier:
                         yield kinematics_df
 
     @staticmethod
-    def y_label_column(df, start_buffer=0.2, end_buffer=0.2, fs=100):
-        # Each instance where time == 0 is a start of a new trial
-        trial_breaks = df['time'].eq(0).cumsum()
-        # Initialise all zeros
+    def y_label_column(df, event, events_dict=None, task=None, fs=100):
+        # Initialize all zeros
         labels = pd.Series(0, index=df.index, name='y')
-        # Group each (id, trial) separately
-        groups = df.groupby([df['id'], trial_breaks]).groups
-        for (_, _), idx in groups.items():
-            n = len(idx)
-            # How many samples to skip at start and end
-            skip_start = int(np.round(start_buffer * fs))
-            skip_end   = int(np.round(end_buffer   * fs))
+        
+        # Get event type
+        base_event = event
+        for known_event in WHOLE_EVENTS | REPETITIVE_EVENTS:
+            if event.startswith(known_event):
+                base_event = known_event
+                break
 
-            # Make a zero array, then set 1’s in the core window
+        # Get window sizes
+        event_size = EVENT_SIZES[base_event]  # Already in frames
+        
+        if base_event in WHOLE_EVENTS and events_dict is not None and task is not None:
+            # Get standard deviation from cache or compute it
+            std_map = compute_whole_event_std(task, events_dict, fs)
+            std_size = std_map.get(base_event, 0)  # Get std or default to 0
+            # Round the sum to nearest whole number of frames
+            center_window = round(event_size + std_size)
+            # Convert to samples for labeling
+            n = len(df)
+            center_start = (n - center_window) // 2
+            center_end = center_start + center_window
+            # Set 1's in the center window only
             mask = np.zeros(n, dtype=int)
-            mask[skip_start : n - skip_end] = 1
-
-            # Assign back into the labels Series
-            labels.loc[idx] = mask
+            mask[center_start:center_end] = 1
+            labels[:] = mask
+            
+        elif base_event in REPETITIVE_EVENTS:
+            # For repetitive events, label the full duration (excluding cycle buffers)
+            cycle_size = event_size  # one cycle in frames
+            # Skip the buffer zones
+            n = len(df)
+            mask = np.zeros(n, dtype=int)
+            mask[cycle_size:-cycle_size] = 1  # Label everything except buffer zones
+            labels[:] = mask
 
         return labels
     
     @staticmethod
-    def sliding_window(df, window_size, stride=1):
+    def sliding_window(df, event, events_dict=None, task=None, fs=100, stride=1):
         windows = []
+        # Get base event name
+        base_event = event
+        for known_event in WHOLE_EVENTS | REPETITIVE_EVENTS:
+            if event.startswith(known_event):
+                base_event = known_event
+                break
+        
+        # Get base window size
+        window_size = EVENT_SIZES[base_event]  # Already in frames
+        
+        # Adjust window size for whole events using std
+        if base_event in WHOLE_EVENTS and events_dict is not None and task is not None:
+            std_map = compute_whole_event_std(task, events_dict, fs)
+            std_size = std_map.get(base_event, 0)
+            window_size = round(window_size + std_size)  # Round to nearest frame
+        
         # Assign a trial index within each id
         df = df.copy()
         df['trial'] = df['time'].eq(0).cumsum()
@@ -126,20 +159,17 @@ class UpperBodyClassifier:
         return windows
     
     @staticmethod
-    def feature_extraction(data, y, event, n_jobs):
+    def feature_extraction(data, y, event, n_jobs, events_dict=None, task=None):
         # Merge y labels into the data
         df = data.copy()
         df['y'] = y
-        
-        # Pick window size based on event type from EventWindowSize
-        window_size = EventWindowSize.events.value[event]
 
         # Create lists to store window data
         windows_data = []
         window_ids = []
         y_windows = []
-        
-        for (eid, start), w in UpperBodyClassifier.sliding_window(df, window_size):
+
+        for (eid, start), w in UpperBodyClassifier.sliding_window(df, event, events_dict=events_dict, task=task, stride=1):
             w = w.reset_index(drop=True)
             # Tag every row with window composite id
             w["id"] = (eid, start)
@@ -254,12 +284,23 @@ class UpperBodyClassifier:
             data_iter = UpperBodyClassifier.upper_body_kinematics_for_event(event, os.path.join(root_dir, datatype))
         # Get number of jobs for feature extraction
         n_jobs_features = max(1, (multiprocessing.cpu_count() - 2) // 2)        
+        
+        # Read event labels from the Excel file
+        events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
         # Process each trial
         for i, trial_df in enumerate(data_iter):
+            # Extract task from the file path
+            file_path = trial_df.index.get_level_values('id')[0]  # Get first id
+            try:
+                task = [t for t in ['Combination', 'Defined', 'Free', 'Obstacles', 'Stairs', 'Straight'] 
+                        if t.lower() in file_path.lower()][0]
+            except StopIteration:
+                print(f"Warning: Could not determine task from file path: {file_path}")
+                continue
             # Get labels for this trial
-            y = UpperBodyClassifier.y_label_column(trial_df)           
+            y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict, task=task)          
             # Extract features from windowed data
-            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_jobs_features)            
+            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_jobs_features, events_dict=events_dict, task=task)            
             # Save intermediate features
             feat_file = os.path.join(feat_dir, f"trial_{i}_features.parquet")
             X_feat.to_parquet(feat_file)            
@@ -364,40 +405,59 @@ if __name__ == "__main__":
     
     print(f"System has {total_cores} cores. Using {cores} cores for processing, {n_jobs_features} for feature extraction.")
     
+    # Create status file to indicate processing has started
+    status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
+    with open(status_file, 'w') as f:
+        f.write("Processing started: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")) 
+    
     # Process one datatype at a time to manage memory
-    for datatype in datatypes:
-        print(f"\nProcessing {datatype} data...")
-        try:
-            outputs = Parallel(n_jobs=cores, prefer="threads")(
-                delayed(UpperBodyPipeline.process_event)(
-                    ev, 
-                    root_dir, 
-                    datatype,
-                    f"Z:/Upper Body/Results/10 Participants/{datatype}"
+    try:
+        for datatype in datatypes:
+            print(f"\nProcessing {datatype} data...")
+            try:
+                outputs = Parallel(n_jobs=cores, prefer="threads")(
+                    delayed(UpperBodyPipeline.process_event)(
+                        ev, 
+                        root_dir, 
+                        datatype,
+                        f"Z:/Upper Body/Results/10 Participants/{datatype}"
+                    )
+                    for ev in events
                 )
-                for ev in events
-            )
-            
-            # Force garbage collection between datatypes
-            import gc
-            gc.collect()
-            
-            for o in outputs:
-                print(o)
                 
-        except MemoryError:
-            print(f"Memory error encountered. Reducing parallel processing...")
-            # Fallback to fewer cores if memory error occurs
-            cores_fallback = max(1, cores // 2)
-            outputs = Parallel(n_jobs=cores_fallback, prefer="threads")(
-                delayed(UpperBodyPipeline.process_event)(
-                    ev, 
-                    root_dir, 
-                    datatype,
-                    f"Z:/Upper Body/Results/10 Participants/{datatype}"
+                # Force garbage collection between datatypes
+                import gc
+                gc.collect()
+                
+                for o in outputs:
+                    print(o)
+                    # Update status file after each datatype
+                    with open(status_file, 'a') as f:
+                        f.write(f"\nCompleted {datatype}: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    
+            except MemoryError:
+                print(f"Memory error encountered. Reducing parallel processing...")
+                # Fallback to fewer cores if memory error occurs
+                cores_fallback = max(1, cores // 2)
+                outputs = Parallel(n_jobs=cores_fallback, prefer="threads")(
+                    delayed(UpperBodyPipeline.process_event)(
+                        ev, 
+                        root_dir, 
+                        datatype,
+                        f"Z:/Upper Body/Results/10 Participants/{datatype}"
+                    )
+                    for ev in events
                 )
-                for ev in events
-            )
-            
-            for o in outputs:
-                print(o)
+                
+                for o in outputs:
+                    print(o)
+
+        # Mark processing as complete
+        with open(status_file, 'a') as f:
+            f.write("\nProcessing completed successfully: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    except Exception as e:
+        # Log any errors that occurred
+        with open(status_file, 'a') as f:
+            f.write(f"\nError occurred: {str(e)}\n" + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
+        raise  # Re-raise the exception after logging
