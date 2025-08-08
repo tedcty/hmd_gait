@@ -185,9 +185,9 @@ def trim_events(df, events_dict, pid, task, cond, time_col='time', sample_rate=1
             start_time = event_mid - (center_window_seconds / 2) - center_window_seconds  # Left buffer
             end_time = event_mid + (center_window_seconds / 2) + center_window_seconds    # Right buffer
             
-        elif event in REPETITIVE_EVENTS:
+        elif base_event in REPETITIVE_EVENTS:  # Changed from 'event' to 'base_event'
             # For repetitive events, keep full duration plus one cycle buffer
-            cycle_size = EVENT_SIZES[event] / sample_rate  # One cycle in seconds
+            cycle_size = EVENT_SIZES[base_event] / sample_rate  # Changed from 'event' to 'base_event'
             start_time = raw_start - cycle_size  # Buffer of one cycle
             end_time = raw_end + cycle_size      # Buffer of one cycle
 
