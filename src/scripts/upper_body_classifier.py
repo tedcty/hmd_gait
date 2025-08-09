@@ -6,7 +6,6 @@ from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from ptb.ml.tags import MLKeys
-from tsfresh.utilities.dataframe_functions import impute
 from tsfresh.transformers import FeatureSelector
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -15,7 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
 from event_constants import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES, EventWindowSize)
-from trim_events import compute_whole_event_std, read_event_labels
+from trim_events import compute_whole_event_std_global, read_event_labels
 
 
 class UpperBodyClassifier:
@@ -85,7 +84,7 @@ class UpperBodyClassifier:
                         yield kinematics_df
 
     @staticmethod
-    def y_label_column(df, event, events_dict=None, task=None, fs=100):
+    def y_label_column(df, event, events_dict=None, fs=100):
         # Initialize all zeros
         labels = pd.Series(0, index=df.index, name='y')
         
@@ -99,9 +98,9 @@ class UpperBodyClassifier:
         # Get window sizes
         event_size = EVENT_SIZES[base_event]  # Already in frames
         
-        if base_event in WHOLE_EVENTS and events_dict is not None and task is not None:
+        if base_event in WHOLE_EVENTS and events_dict is not None:
             # Get standard deviation from cache or compute it
-            std_map = compute_whole_event_std(task, events_dict, fs)
+            std_map = compute_whole_event_std_global(events_dict, fs)
             std_size = std_map.get(base_event, 0)  # Get std or default to 0
             # Round the sum to nearest whole number of frames
             center_window = round(event_size + std_size)
@@ -120,13 +119,14 @@ class UpperBodyClassifier:
             # Skip the buffer zones
             n = len(df)
             mask = np.zeros(n, dtype=int)
-            mask[cycle_size:-cycle_size] = 1  # Label everything except buffer zones
+            if n > 2 * cycle_size:
+                mask[cycle_size:-cycle_size] = 1  # Label everything except buffer zones
             labels[:] = mask
 
         return labels
     
     @staticmethod
-    def sliding_window(df, event, events_dict=None, task=None, fs=100, stride=1):
+    def sliding_window(df, event, events_dict=None, fs=100, stride=1):
         windows = []
         # Get base event name
         base_event = event
@@ -139,9 +139,9 @@ class UpperBodyClassifier:
         window_size = EVENT_SIZES[base_event]  # Already in frames
         
         # Adjust window size for whole events using std
-        if base_event in WHOLE_EVENTS and events_dict is not None and task is not None:
-            std_map = compute_whole_event_std(task, events_dict, fs)
-            std_size = std_map.get(base_event, 0)
+        if base_event in WHOLE_EVENTS and events_dict is not None:
+            std_map = compute_whole_event_std_global(events_dict, fs)
+            std_size = int(std_map.get(base_event, 0))
             window_size = round(window_size + std_size)  # Round to nearest frame
         
         # Assign a trial index within each id
@@ -160,7 +160,7 @@ class UpperBodyClassifier:
         return windows
     
     @staticmethod
-    def feature_extraction(data, y, event, n_jobs, events_dict=None, task=None):
+    def feature_extraction(data, y, event, n_jobs, events_dict=None):
         # Merge y labels into the data
         df = data.copy()
         df['y'] = y
@@ -170,7 +170,7 @@ class UpperBodyClassifier:
         window_ids = []
         y_windows = []
 
-        for (eid, start), w in UpperBodyClassifier.sliding_window(df, event, events_dict=events_dict, task=task, stride=1):
+        for (eid, start), w in UpperBodyClassifier.sliding_window(df, event, events_dict=events_dict, stride=1):
             w = w.reset_index(drop=True)
             # Tag every row with window composite id
             w["id"] = (eid, start)
@@ -260,6 +260,7 @@ class UpperBodyClassifier:
         plt.ylabel('Actual')
         cm_path = os.path.join(results_path, "confusion_matrix.png")
         plt.savefig(cm_path)
+        plt.close()
 
         return clf
     
@@ -290,18 +291,10 @@ class UpperBodyClassifier:
         events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
         # Process each trial
         for i, trial_df in enumerate(data_iter):
-            # Extract task from the file path
-            file_path = trial_df.index.get_level_values('id')[0]  # Get first id
-            try:
-                task = [t for t in ['Combination', 'Defined', 'Free', 'Obstacles', 'Stairs', 'Straight'] 
-                        if t.lower() in file_path.lower()][0]
-            except StopIteration:
-                print(f"Warning: Could not determine task from file path: {file_path}")
-                continue
             # Get labels for this trial
-            y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict, task=task)          
+            y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict)
             # Extract features from windowed data
-            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_jobs_features, events_dict=events_dict, task=task)            
+            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_jobs_features, events_dict=events_dict)
             # Save intermediate features
             feat_file = os.path.join(feat_dir, f"trial_{i}_features.parquet")
             X_feat.to_parquet(feat_file)            
