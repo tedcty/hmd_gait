@@ -45,8 +45,12 @@ class UpperBodyClassifier:
                         for imu in UpperBodyIMU:
                             if imu.value in file:
                                 id_str = f"{imu.value}_imu"
+                                break
                         imu_df['id'] = id_str
-                        # Reorder columns to make 'id' the first column
+                        # Prefix all signal columns with sensor id (keep time/id as is)
+                        rename_map = {c: f"{id_str}_{c}" for c in imu_df.columns if c not in ['time', 'id']}
+                        imu_df = imu_df.rename(columns=rename_map)
+                        # Put 'id' first
                         cols = ['id'] + [col for col in imu_df.columns if col != 'id']
                         imu_df = imu_df[cols]
 
@@ -77,9 +81,7 @@ class UpperBodyClassifier:
                         kinematics_df['id'] = id_str
                         # Keep only time and upper body kinematics columns
                         cols_to_keep = ['time'] + [c for c in kin_cols if c in kinematics_df.columns]
-                        kinematics_df = kinematics_df[cols_to_keep].copy()
-                        # Reorder columns to make 'id' the first column
-                        kinematics_df = kinematics_df[['id'] + cols_to_keep]
+                        kinematics_df = kinematics_df[['id'] + cols_to_keep].copy()
 
                         yield kinematics_df
 
@@ -173,15 +175,22 @@ class UpperBodyClassifier:
         for (eid, start), w in UpperBodyClassifier.sliding_window(df, event, events_dict=events_dict, stride=1):
             w = w.reset_index(drop=True)
             # Tag every row with window composite id
-            w["id"] = (eid, start)
+            w["id"] = f"{eid}|{start}"  # to all rows in w
             windows_data.append(w)
-            window_ids.append((eid, start))
+            window_ids.append(f"{eid}|{start}")
             # Majority vote: label = 1 if more than 80% of samples are 1
             label = int(w['y'].mean() > 0.8)
             y_windows.append(label)
 
+        if not windows_data:
+            # If no windows were created, return empty DataFrames
+            return pd.DataFrame(), pd.Series(dtype=int)
+
         # Stack all windows into a single DataFrame
         combined_windows = pd.concat(windows_data, ignore_index=True)
+
+        # Drop y before extracting features
+        combined_windows = combined_windows.drop(columns=['y', 'trial'], errors='ignore')
 
         # Extract features using tsfresh  NOTE: Currently using MinimalFCParameters
         X_feat, _ = MLOperations.extract_features_from_x(
@@ -189,57 +198,63 @@ class UpperBodyClassifier:
             fc_parameters=MLKeys.MFCParameters,
             n_jobs=n_jobs)
         
-        # Group features by window id to get one row per window
-        X_feat = X_feat.groupby('id').first().reset_index()
-    
-        # Create final DataFrame with proper index
-        X_feat.index = pd.MultiIndex.from_tuples(window_ids, names=["id", "start"])
+        # Ensure index type matches string ids and align order
+        X_feat.index = X_feat.index.astype(str)
+        valid_ids = [i for i in window_ids if i in X_feat.index]
+        X_feat = X_feat.loc[valid_ids]
 
-        # Create Series for labels
-        y_feat = pd.Series(y_windows, index=X_feat.index, name='y')
+        # Labels aligned to the same valid_ids
+        y_feat = pd.Series(
+            [y for i, y in zip(window_ids, y_windows) if i in X_feat.index],
+            index=valid_ids,
+            name='y'
+        )
 
         return X_feat, y_feat
     
     @staticmethod
-    def feature_selection(X, y):
+    def feature_selection(X_train, y_train):
         # Select statistically significant features using tsfresh's FeatureSelector transformer
         selector = FeatureSelector()
-        X_selected = selector.fit_transform(X, y)
+        X_train_sel = selector.fit_transform(X_train, y_train)
         # Fit a RandomForestClassifier on the selected features
-        clf = RandomForestClassifier()
-        clf.fit(X_selected, y)
+        rf = RandomForestClassifier()
+        rf.fit(X_train_sel, y_train)
         # Get feature importances
-        fi = pd.Series(clf.feature_importances_, X_selected.columns)
-        return {
-            "model": clf,
-            "feature": X_selected.columns.tolist(),
-            "feature_importance": fi,
-            "X_selected": X_selected
-        }
-    
-    @staticmethod
-    def export_features_with_importance(selected, top_100, results_path):
-        # Slice original importance Series to only top-100
-        fi = selected["feature_importance"]
-        top_list = top_100["pfx"]
-        top_imp_dict = fi.loc[top_list].to_dict()
-        # Export as JSON using helper
-        MLOperations.export_features_json(top_imp_dict, results_path)
+        importances = pd.Series(rf.feature_importances_, X_train_sel.columns)
+        return selector, X_train_sel, importances
 
     @staticmethod
-    def train_and_test_classifier(X, y, results_path):
+    def train_and_test_classifier(X, y, results_path, event, datatype):
         # Split data into training and test sets for classification
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        
+        # Feature selection on training set
+        selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train)
+        X_test_sel = selector.transform(X_test)
+        print(f"{datatype} features selected by hypothesis testing.")
+        
+        # Pick the top-100 features by importance
+        top100 = MLOperations.select_top_features_from_x(importances, num_of_feat=100)
+        top100 = top100["pfx"]
+        X_train_top = X_train_sel[top100]
+        X_test_top = X_test_sel[top100]
+        # Export IMU top features with importances to JSON
+        final_feat_path = os.path.join(results_path, f"{datatype}_{event}_top100_features.json")
+        MLOperations.export_features_json(importances[top100].to_dict(), final_feat_path)
+        print(f"Found Top 100 {datatype} features by importance.")
+        
         # Fit Random Forest Classifier
         clf = RandomForestClassifier()
-        clf.fit(X_train, y_train)
+        clf.fit(X_train_top, y_train)
         # Evaluate the classification model
-        y_pred = clf.predict(X_test)
+        y_pred = clf.predict(X_test_top)
+        y_proba = clf.predict_proba(X_test_top)[:, 1]  # Get probabilities for ROC AUC
         # Calculate metrics
         accuracy = accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred)
         cm = confusion_matrix(y_test, y_pred)
-        auc_score = roc_auc_score(y_test, y_pred)
+        auc_score = roc_auc_score(y_test, y_proba)
         # Save metrics to file
         os.makedirs(results_path, exist_ok=True)
         # Save accuracy and AUC scores
@@ -270,8 +285,8 @@ class UpperBodyClassifier:
         dump(clf, model_path)
 
     @staticmethod
-    def feature_engineering(event, root_dir, datatype, results_dir):
-        # Combine all functions involving DataFrame creation, feature extraction and selection
+    def feature_engineering(event, root_dir, datatype):
+        # Combine all functions involving DataFrame creation, feature extraction (no selection here)
 
         # Folder directory for intermediate features
         feat_dir = os.path.join("Z:/Upper Body/Results/10 Participants", datatype, "intermediate_features", event)
@@ -306,17 +321,8 @@ class UpperBodyClassifier:
         y_combined = pd.concat(all_labels, axis=0)
         if y_combined.nunique() < 2:
             raise RuntimeError("Labelling produces a single class. Check threshold and window size settings.")
-        # Select features by hypothesis testing (tsfresh)
-        X_sel = UpperBodyClassifier.feature_selection(X_combined, y_combined)
-        print(f"{datatype} features selected by hypothesis testing.")
-        # Pick the top-100 features by importance
-        top100 = MLOperations.select_top_features_from_x(X_sel["feature_importance"], num_of_feat=100)
-        # Export IMU top features with importances to JSON
-        final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
-        UpperBodyClassifier.export_features_with_importance(X_sel, top100, results_path=final_feat_path)
-        print(f"Found Top 100 {datatype} features by importance.")
 
-        return X_sel["X_selected"][top100["pfx"]], y_combined
+        return X_combined, y_combined
     
 
 class UpperBodyPipeline:
@@ -331,14 +337,14 @@ class UpperBodyPipeline:
         results_dir = os.path.join(results_base, safe_name)
         os.makedirs(results_dir, exist_ok=True)
 
-        # IMU feature engineering algorithm outputting the final feature set and associated labels
+        # IMU feature engineering algorithm outputting the extracted features and labels
         print(f"[{event}] --> Loading {datatype} data ...")
-        X_top100, y = UpperBodyClassifier.feature_engineering(event, root_dir, datatype, results_dir)
-        print(f"[{event}] --> {datatype} feature matrix: {X_top100.shape}, labels: {y.shape}")
+        X, y = UpperBodyClassifier.feature_engineering(event, root_dir, datatype)
+        print(f"[{event}] --> {datatype} feature matrix: {X.shape}, labels: {y.shape}")
 
         # Train and test Random Forest Classifier model using top-100 features
         print(f"[{event}] --> Training & testing {datatype} classifier ...")
-        clf = UpperBodyClassifier.train_and_test_classifier(X_top100, y, results_dir)
+        clf = UpperBodyClassifier.train_and_test_classifier(X, y, results_dir, event, datatype)
 
         # Export the final model
         UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
