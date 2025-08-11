@@ -351,15 +351,45 @@ class UpperBodyClassifier:
 
         export_features_json(importances[top100].to_dict(), final_feat_path)
         print(f"Found Top 100 {datatype} features by importance.")
+
+        return train_pids, test_pids
     
     @staticmethod
     def train_and_test_classifier(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # If split not provided, try load it; if not present, run selection now
+        train_path = os.path.join(results_dir, "train_pids.json")
+        test_path = os.path.join(results_dir, "test_pids.json")
+        if train_pids is None or test_pids is None:
+            if os.path.exists(train_path) and os.path.exists(test_path):
+                with open(train_path, "r", encoding="utf-8") as f:
+                    train_pids = set(json.load(f))
+                with open(test_path, "r", encoding="utf-8") as f:
+                    test_pids = set(json.load(f))
+            else:
+                train_pids, test_pids = UpperBodyClassifier.select_and_export_top_features(out_root, datatype, event, results_dir)
+        # Load top-100 importances
+        top100_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
+        if not os.path.exists(top100_path):
+            train_pids, test_pids = UpperBodyClassifier.select_and_export_top_features(out_root, datatype, event, results_dir, train_pids, test_pids)
+        with open(top100_path, "r", encoding="utf-8") as f:
+            feat_imp = json.load(f)
+        top_names = sorted(feat_imp.keys(), key=lambda x: feat_imp[x], reverse=True)
+        # Load train/test features
+        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
+        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
+        # Restrict to top 100 columns
+        X_train = X_train.reindex(columns=top_names, fill_value=0)
+        X_test = X_test.reindex(columns=top_names, fill_value=0)
+
+        # Train and evaluate
         # Fit Random Forest Classifier
         clf = RandomForestClassifier()
-        clf.fit(X_train_top, y_train)
+        clf.fit(X_train, y_train)
         # Evaluate the classification model
-        y_pred = clf.predict(X_test_top)
-        y_proba = clf.predict_proba(X_test_top)[:, 1]  # Get probabilities for ROC AUC
+        y_pred = clf.predict(X_test)
+        y_proba = clf.predict_proba(X_test)[:, 1]  # Get probabilities for ROC AUC
         # Calculate metrics
         accuracy = accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred)
@@ -429,7 +459,7 @@ if __name__ == "__main__":
     status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
 
     # Toggles
-    RUN_EXTRACTION = True
+    RUN_EXTRACT_AND_SELECT = True
     RUN_TRAINING = True
 
     # Reserve 2 cores for system stability, use remaining cores for processing
@@ -446,9 +476,10 @@ if __name__ == "__main__":
         f.write(f"Run start: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
 
     try:
-        # Extract per-trial CSVs
-        if RUN_EXTRACTION:
+        # Extract + Select
+        if RUN_EXTRACT_AND_SELECT:
             for datatype in datatypes:
+                # Extract
                 write_status(status_file, f"[EXTRACT] {datatype} BEGIN")
                 Parallel(n_jobs=events_n_jobs, prefer="threads")(
                     delayed(UpperBodyClassifier.extract_and_save_features)(
@@ -456,7 +487,16 @@ if __name__ == "__main__":
                     ) for ev in events
                 )
                 write_status(status_file, f"[EXTRACT] {datatype} END")
-        
+
+                # Select
+                write_status(status_file, f"[SELECT] {datatype} BEGIN")
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.select_and_export_top_features)(
+                        out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_"))
+                    ) for ev in events
+                )
+                write_status(status_file, f"[SELECT] {datatype} END")
+
         # Train/test from saved CSVs
         if RUN_TRAINING:
             for datatype in datatypes:
