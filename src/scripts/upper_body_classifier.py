@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from enum import Enum
+import json
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
@@ -220,7 +221,7 @@ class UpperBodyClassifier:
         return X_feat, y_feat
     
     @staticmethod
-    def extract_and_save_features(event, root_dir, datatype, out_root, n_job_features):
+    def extract_and_save_features(event, root_dir, datatype, out_root, n_jobs_features):
         # Choose data type
         if datatype == "IMU":
             data_iter = UpperBodyClassifier.upper_body_imu_for_event(event, os.path.join(root_dir, datatype))
@@ -238,7 +239,7 @@ class UpperBodyClassifier:
 
             y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict)
             X_feat, y_feat = UpperBodyClassifier.feature_extraction(
-                trial_df, y, event, n_jobs=n_job_features, events_dict=events_dict
+                trial_df, y, event, n_jobs=n_jobs_features, events_dict=events_dict
                 )
             if X_feat.empty:
                 print(f"Skip {pid}/{sensor}/{trial_name} - No windows")
@@ -315,29 +316,44 @@ class UpperBodyClassifier:
     def export_model(clf, results_path, event, datatype):
         model_path = os.path.join(results_path, f"{datatype}_{event}_rf_classifier.pkl")
         dump(clf, model_path)
-    
+
     @staticmethod
-    def train_and_test_classifier(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
+    def select_and_export_top_features(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
+        # Load saved CSV features, do train-only selection, export top-100
+        os.makedirs(results_dir, exist_ok=True)
+
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         if train_pids is None or test_pids is None:
             train_pids, test_pids = UpperBodyClassifier.split_participants(base, train_size=0.8, random_state=42)
-        # Load
+        
+        with open(os.path.join(results_dir, "train_pids.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(list(train_pids)), f, indent=2)
+
+        with open(os.path.join(results_dir, "test_pids.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(list(test_pids)), f, indent=2)
+
+        # Load features only for train participants
         X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
-        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
+
         # Feature selection
         selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train)
-        X_test_sel = selector.transform(X_test)
 
         top100 = MLOperations.select_top_features_from_x(importances, num_of_feat=100)
         top100 = top100["pfx"]
 
-        X_train_top = X_train_sel[top100]
-        X_test_top = X_test_sel[top100]
         # Export IMU top features with importances to JSON
         final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
-        MLOperations.export_features_json(importances[top100].to_dict(), final_feat_path)
-        print(f"Found Top 100 {datatype} features by importance.")
+        
+        # Modified function from ptb to order features by importance not alphabetical
+        def export_features_json(ef: dict, filepath):
+            with open(filepath, 'w') as outfile:
+                json.dump(ef, outfile, indent=4)
 
+        export_features_json(importances[top100].to_dict(), final_feat_path)
+        print(f"Found Top 100 {datatype} features by importance.")
+    
+    @staticmethod
+    def train_and_test_classifier(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
         # Fit Random Forest Classifier
         clf = RandomForestClassifier()
         clf.fit(X_train_top, y_train)
@@ -421,7 +437,6 @@ if __name__ == "__main__":
     events_n_jobs = max(1, total_cores - 2)
     tsfresh_n_jobs = max(1, total_cores // events_n_jobs)
 
-    @staticmethod
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{msg}\n")
