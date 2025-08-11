@@ -29,9 +29,10 @@ class UpperBodyClassifier:
             if os.path.isdir(pid_path):
                 for file in os.listdir(pid_path):
                     # Use vec3_raw IMU data and only select upper body IMU
-                    if (event in file and 
-                        file.endswith("_imu_vec3_2_raw.csv") and 
-                        any(imu.value in file for imu in UpperBodyIMU)):
+                    if (event in file
+                        and "imu_vec3" in file
+                        and file.endswith("_raw.csv")
+                        and any(imu.value in file for imu in UpperBodyIMU)):
                         file_path = os.path.join(pid_path, file)
                         # Read selected IMU file
                         imu_df = pd.read_csv(file_path)
@@ -200,10 +201,10 @@ class UpperBodyClassifier:
         # Drop y before extracting features
         combined_windows = combined_windows.drop(columns=['y', 'trial', 'participant', 'trial_name'], errors='ignore')
 
-        # Extract features using tsfresh  NOTE: Currently using MinimalFCParameters
+        # Extract features using tsfresh  NOTE: Currently using ComprehensiveFCParameters
         X_feat, _ = MLOperations.extract_features_from_x(
             combined_windows,
-            fc_parameters=MLKeys.MFCParameters,
+            fc_parameters=MLKeys.CFCParameters,
             n_jobs=n_jobs)
         
         # Ensure index type matches string ids and align order
