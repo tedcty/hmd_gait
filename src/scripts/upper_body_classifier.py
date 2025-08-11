@@ -237,7 +237,9 @@ class UpperBodyClassifier:
             trial_name = trial_df['trial_name'].iloc[0]
 
             y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict)
-            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_job_features, events_dict=events_dict)
+            X_feat, y_feat = UpperBodyClassifier.feature_extraction(
+                trial_df, y, event, n_jobs=n_job_features, events_dict=events_dict
+                )
             if X_feat.empty:
                 print(f"Skip {pid}/{sensor}/{trial_name} - No windows")
                 continue
@@ -320,8 +322,8 @@ class UpperBodyClassifier:
         if train_pids is None or test_pids is None:
             train_pids, test_pids = UpperBodyClassifier.split_participants(base, train_size=0.8, random_state=42)
         # Load
-        X_train, y_train = UpperBodyClassifier.load_features_for_participants(base, datatype, event, train_pids)
-        X_test, y_test = UpperBodyClassifier.load_features_for_participants(base, datatype, event, test_pids)
+        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
+        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
         # Feature selection
         selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train)
         X_test_sel = selector.transform(X_test)
@@ -373,35 +375,6 @@ class UpperBodyClassifier:
         UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
 
         return clf, (train_pids, test_pids)
-    
-
-class UpperBodyPipeline:
-
-    @staticmethod
-    def process_event(event, root_dir, datatype, results_base):
-        
-        print(f"\n=== Starting EVENT: {event} ===")
-
-        # Build a results folder per event
-        safe_name = event.replace(" ", "_")
-        results_dir = os.path.join(results_base, safe_name)
-        os.makedirs(results_dir, exist_ok=True)
-
-        # IMU feature engineering algorithm outputting the extracted features and labels
-        print(f"[{event}] --> Loading {datatype} data ...")
-        X, y = UpperBodyClassifier.feature_engineering(event, root_dir, datatype)
-        print(f"[{event}] --> {datatype} feature matrix: {X.shape}, labels: {y.shape}")
-
-        # Train and test Random Forest Classifier model using top-100 features
-        print(f"[{event}] --> Training & testing {datatype} classifier ...")
-        clf = UpperBodyClassifier.train_and_test_classifier(X, y, results_dir, event, datatype)
-
-        # Export the final model
-        UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
-        print(f"[{event}] --> Classifier trained and saved.")
-
-        print(f"=== Finished EVENT: {event} ===\n")
-        return f"{event} done."
 
 
 class UpperBodyKinematics(Enum):
@@ -426,6 +399,8 @@ class UpperBodyIMU(Enum):
 
 
 if __name__ == "__main__":
+    from datetime import datetime
+
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
     datatypes = ["IMU", "Kinematics"]
@@ -433,68 +408,56 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
+    out_root = "Z:/Upper Body/Results/10 Participants/features"
+    models_root = "Z:/Upper Body/Results/10 Participants/models"
+    status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
+
+    # Toggles
+    RUN_EXTRACTION = True
+    RUN_TRAINING = True
+
     # Reserve 2 cores for system stability, use remaining cores for processing
     total_cores = multiprocessing.cpu_count()
-    cores = max(1, total_cores - 2)  # Use all cores except 2 for system
+    events_n_jobs = max(1, total_cores - 2)
+    tsfresh_n_jobs = max(1, total_cores // events_n_jobs)
 
-    # Set parallel jobs for feature extraction
-    n_jobs_features = max(1, cores // 2)  # Use half of available cores for feature extraction
-    
-    print(f"System has {total_cores} cores. Using {cores} cores for processing, {n_jobs_features} for feature extraction.")
-    
-    # Create status file to indicate processing has started
-    status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
+    @staticmethod
+    def write_status(path, msg):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")
+
+    os.makedirs(os.path.dirname(status_file), exist_ok=True)
     with open(status_file, 'w') as f:
-        f.write("Processing started: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")) 
-    
-    # Process one datatype at a time to manage memory
-    try:
-        for datatype in datatypes:
-            print(f"\nProcessing {datatype} data...")
-            try:
-                outputs = Parallel(n_jobs=cores, prefer="threads")(
-                    delayed(UpperBodyPipeline.process_event)(
-                        ev, 
-                        root_dir, 
-                        datatype,
-                        f"Z:/Upper Body/Results/10 Participants/{datatype}"
-                    )
-                    for ev in events
-                )
-                
-                # Force garbage collection between datatypes
-                import gc
-                gc.collect()
-                
-                for o in outputs:
-                    print(o)
-                    # Update status file after each datatype
-                    with open(status_file, 'a') as f:
-                        f.write(f"\nCompleted {datatype}: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
-                    
-            except MemoryError:
-                print(f"Memory error encountered. Reducing parallel processing...")
-                # Fallback to fewer cores if memory error occurs
-                cores_fallback = max(1, cores // 2)
-                outputs = Parallel(n_jobs=cores_fallback, prefer="threads")(
-                    delayed(UpperBodyPipeline.process_event)(
-                        ev, 
-                        root_dir, 
-                        datatype,
-                        f"Z:/Upper Body/Results/10 Participants/{datatype}"
-                    )
-                    for ev in events
-                )
-                
-                for o in outputs:
-                    print(o)
+        f.write(f"Run start: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
 
-        # Mark processing as complete
-        with open(status_file, 'a') as f:
-            f.write("\nProcessing completed successfully: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
+    try:
+        # Extract per-trial CSVs
+        if RUN_EXTRACTION:
+            for datatype in datatypes:
+                write_status(status_file, f"[EXTRACT] {datatype} BEGIN")
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.extract_and_save_features)(
+                        ev, root_dir, datatype, out_root, tsfresh_n_jobs
+                    ) for ev in events
+                )
+                write_status(status_file, f"[EXTRACT] {datatype} END")
+        
+        # Train/test from saved CSVs
+        if RUN_TRAINING:
+            for datatype in datatypes:
+                write_status(status_file, f"[TRAIN] {datatype} BEGIN")
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.train_and_test_classifier)(
+                        out_root, 
+                        datatype, 
+                        ev, 
+                        os.path.join(models_root, datatype, ev.replace(" ", "_"))
+                    ) for ev in events
+                )
+                write_status(status_file, f"[TRAIN] {datatype} END")
+
+        write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
     except Exception as e:
-        # Log any errors that occurred
-        with open(status_file, 'a') as f:
-            f.write(f"\nError occurred: {str(e)}\n" + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
-        raise  # Re-raise the exception after logging
+        write_status(status_file, f"Run failed: {e}")
+        raise
