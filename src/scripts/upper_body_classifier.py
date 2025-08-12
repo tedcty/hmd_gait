@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from enum import Enum
+import json
 from joblib import dump, Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
@@ -28,9 +29,10 @@ class UpperBodyClassifier:
             if os.path.isdir(pid_path):
                 for file in os.listdir(pid_path):
                     # Use vec3_raw IMU data and only select upper body IMU
-                    if (event in file and 
-                        file.endswith("_imu_vec3_2_raw.csv") and 
-                        any(imu.value in file for imu in UpperBodyIMU)):
+                    if (event in file
+                        and "imu_vec3" in file
+                        and file.endswith("_raw.csv")
+                        and any(imu.value in file for imu in UpperBodyIMU)):
                         file_path = os.path.join(pid_path, file)
                         # Read selected IMU file
                         imu_df = pd.read_csv(file_path)
@@ -50,8 +52,12 @@ class UpperBodyClassifier:
                         # Prefix all signal columns with sensor id (keep time/id as is)
                         rename_map = {c: f"{id_str}_{c}" for c in imu_df.columns if c not in ['time', 'id']}
                         imu_df = imu_df.rename(columns=rename_map)
+                        # Add participant and trial name
+                        imu_df['participant'] = pid
+                        trial_name = file.removesuffix("_imu_vec3_2_raw.csv")
+                        imu_df['trial_name'] = trial_name
                         # Put 'id' first
-                        cols = ['id'] + [col for col in imu_df.columns if col != 'id']
+                        cols = ['id', 'participant', 'trial_name'] + [col for col in imu_df.columns if col not in ['id', 'participant', 'trial_name']]
                         imu_df = imu_df[cols]
 
                         yield imu_df
@@ -77,11 +83,14 @@ class UpperBodyClassifier:
                         for col in cols_to_filter:
                             kinematics_df[col] = Butterworth.butter_low_filter(kinematics_df[col], cut=6, fs=100, order=4)
                         # Extract id: remove the suffix
-                        id_str = 'kinematics'
-                        kinematics_df['id'] = id_str
+                        kinematics_df['id'] = 'kinematics'
+                        # Add participant and trial name
+                        kinematics_df['participant'] = pid
+                        trial_name = file.removesuffix(".mot.csv")
+                        kinematics_df['trial_name'] = trial_name
                         # Keep only time and upper body kinematics columns
                         cols_to_keep = ['time'] + [c for c in kin_cols if c in kinematics_df.columns]
-                        kinematics_df = kinematics_df[['id'] + cols_to_keep].copy()
+                        kinematics_df = kinematics_df[['id', 'participant', 'trial_name'] + cols_to_keep].copy()
 
                         yield kinematics_df
 
@@ -190,12 +199,12 @@ class UpperBodyClassifier:
         combined_windows = pd.concat(windows_data, ignore_index=True)
 
         # Drop y before extracting features
-        combined_windows = combined_windows.drop(columns=['y', 'trial'], errors='ignore')
+        combined_windows = combined_windows.drop(columns=['y', 'trial', 'participant', 'trial_name'], errors='ignore')
 
-        # Extract features using tsfresh  NOTE: Currently using MinimalFCParameters
+        # Extract features using tsfresh  NOTE: Currently using ComprehensiveFCParameters
         X_feat, _ = MLOperations.extract_features_from_x(
             combined_windows,
-            fc_parameters=MLKeys.MFCParameters,
+            fc_parameters=MLKeys.CFCParameters,
             n_jobs=n_jobs)
         
         # Ensure index type matches string ids and align order
@@ -213,6 +222,86 @@ class UpperBodyClassifier:
         return X_feat, y_feat
     
     @staticmethod
+    def extract_and_save_features(event, root_dir, datatype, out_root, n_jobs_features):
+        # Choose data type
+        if datatype == "IMU":
+            data_iter = UpperBodyClassifier.upper_body_imu_for_event(event, os.path.join(root_dir, datatype))
+        elif datatype == "Kinematics":
+            data_iter = UpperBodyClassifier.upper_body_kinematics_for_event(event, os.path.join(root_dir, datatype))
+        else:
+            raise ValueError("data type must be 'IMU' or 'Kinematics'")
+        
+        events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
+
+        for trial_df in data_iter:
+            pid = trial_df['participant'].iloc[0]
+            sensor = trial_df['id'].iloc[0]
+            trial_name = trial_df['trial_name'].iloc[0]
+
+            y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict)
+            X_feat, y_feat = UpperBodyClassifier.feature_extraction(
+                trial_df, y, event, n_jobs=n_jobs_features, events_dict=events_dict
+                )
+            if X_feat.empty:
+                print(f"Skip {pid}/{sensor}/{trial_name} - No windows")
+                continue
+
+            dst_dir = os.path.join(out_root, datatype, event.replace(" ", "_"), pid, sensor)
+            os.makedirs(dst_dir, exist_ok=True)
+            X_path = os.path.join(dst_dir, f"{trial_name}_X.csv")
+            y_path = os.path.join(dst_dir, f"{trial_name}_y.csv")
+
+            X_feat.to_csv(X_path, index=True, index_label="window_id")
+            y_feat.to_frame("y").to_csv(y_path, index=True, index_label="window_id")
+
+            print(f"Saved: {X_path}   ({X_feat.shape[0]} windows, {X_feat.shape[1]} features)")
+
+    @staticmethod
+    def load_features_for_participants(out_root, datatype, event, participants):
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        X_list, y_list = [], []
+        for pid in participants:
+            pid_path = os.path.join(base, pid)
+            if not os.path.isdir(pid_path):
+                continue
+            for sensor in os.listdir(pid_path):
+                sensor_path = os.path.join(pid_path, sensor)
+                if not os.path.isdir(sensor_path):
+                    continue
+                for fname in os.listdir(sensor_path):
+                    if fname.endswith("_X.csv"):
+                        stem = fname[:-6]  # Remove _X.csv
+                        Xp = os.path.join(sensor_path, f"{stem}_X.csv")
+                        Yp = os.path.join(sensor_path, f"{stem}_y.csv")
+                        if not os.path.exists(Yp):
+                            continue
+                        X_df = pd.read_csv(Xp, index_col="window_id")
+                        y_df = pd.read_csv(Yp, index_col="window_id")
+                        y_sr = y_df.iloc[:, 0]
+                        common_idx = X_df.index.intersection(y_sr.index)
+                        if len(common_idx) == 0:
+                            continue
+                        X_df = X_df.loc[common_idx]
+                        y_sr = y_sr.loc[common_idx]
+                        X_list.append(X_df)
+                        y_list.append(y_sr)
+        if not X_list:
+            raise RuntimeError("No CSV features found for given participants.")
+        all_cols = sorted(set().union(*[df.columns for df in X_list]))
+        X_all = pd.concat([df.reindex(columns=all_cols, fill_value=0) for df in X_list], axis=0)
+        y_all = pd.concat(y_list, axis=0)
+        return X_all, y_all
+    
+    @staticmethod
+    def split_participants(base_dir, train_size=0.8, random_state=42):
+        # Split participant folders in base_dir into train/test sets
+        pids = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+        if len(pids) < 2:
+            raise ValueError("Need at least 2 participants for splitting.")
+        train_pids, test_pids = train_test_split(sorted(pids), train_size=train_size, random_state=random_state)
+        return train_pids, test_pids
+
+    @staticmethod
     def feature_selection(X_train, y_train):
         # Select statistically significant features using tsfresh's FeatureSelector transformer
         selector = FeatureSelector()
@@ -223,48 +312,100 @@ class UpperBodyClassifier:
         # Get feature importances
         importances = pd.Series(rf.feature_importances_, X_train_sel.columns)
         return selector, X_train_sel, importances
+    
+    @staticmethod
+    def export_model(clf, results_path, event, datatype):
+        model_path = os.path.join(results_path, f"{datatype}_{event}_rf_classifier.pkl")
+        dump(clf, model_path)
 
     @staticmethod
-    def train_and_test_classifier(X, y, results_path, event, datatype):
-        # Split data into training and test sets for classification
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    def select_and_export_top_features(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
+        # Load saved CSV features, do train-only selection, export top-100
+        os.makedirs(results_dir, exist_ok=True)
+
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        if train_pids is None or test_pids is None:
+            train_pids, test_pids = UpperBodyClassifier.split_participants(base, train_size=0.8, random_state=42)
         
-        # Feature selection on training set
+        with open(os.path.join(results_dir, "train_pids.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(list(train_pids)), f, indent=2)
+
+        with open(os.path.join(results_dir, "test_pids.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(list(test_pids)), f, indent=2)
+
+        # Load features only for train participants
+        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
+
+        # Feature selection
         selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train)
-        X_test_sel = selector.transform(X_test)
-        print(f"{datatype} features selected by hypothesis testing.")
-        
-        # Pick the top-100 features by importance
+
         top100 = MLOperations.select_top_features_from_x(importances, num_of_feat=100)
         top100 = top100["pfx"]
-        X_train_top = X_train_sel[top100]
-        X_test_top = X_test_sel[top100]
+
         # Export IMU top features with importances to JSON
-        final_feat_path = os.path.join(results_path, f"{datatype}_{event}_top100_features.json")
-        MLOperations.export_features_json(importances[top100].to_dict(), final_feat_path)
-        print(f"Found Top 100 {datatype} features by importance.")
+        final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
         
+        # Modified function from ptb to order features by importance not alphabetical
+        def export_features_json(ef: dict, filepath):
+            with open(filepath, 'w') as outfile:
+                json.dump(ef, outfile, indent=4)
+
+        export_features_json(importances[top100].to_dict(), final_feat_path)
+        print(f"Found Top 100 {datatype} features by importance.")
+
+        return train_pids, test_pids
+    
+    @staticmethod
+    def train_and_test_classifier(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # If split not provided, try load it; if not present, run selection now
+        train_path = os.path.join(results_dir, "train_pids.json")
+        test_path = os.path.join(results_dir, "test_pids.json")
+        if train_pids is None or test_pids is None:
+            if os.path.exists(train_path) and os.path.exists(test_path):
+                with open(train_path, "r", encoding="utf-8") as f:
+                    train_pids = set(json.load(f))
+                with open(test_path, "r", encoding="utf-8") as f:
+                    test_pids = set(json.load(f))
+            else:
+                train_pids, test_pids = UpperBodyClassifier.select_and_export_top_features(out_root, datatype, event, results_dir)
+        # Load top-100 importances
+        top100_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
+        if not os.path.exists(top100_path):
+            train_pids, test_pids = UpperBodyClassifier.select_and_export_top_features(out_root, datatype, event, results_dir, train_pids, test_pids)
+        with open(top100_path, "r", encoding="utf-8") as f:
+            feat_imp = json.load(f)
+        top_names = sorted(feat_imp.keys(), key=lambda x: feat_imp[x], reverse=True)
+        # Load train/test features
+        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
+        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
+        # Restrict to top 100 columns
+        X_train = X_train.reindex(columns=top_names, fill_value=0)
+        X_test = X_test.reindex(columns=top_names, fill_value=0)
+
+        # Train and evaluate
         # Fit Random Forest Classifier
         clf = RandomForestClassifier()
-        clf.fit(X_train_top, y_train)
+        clf.fit(X_train, y_train)
         # Evaluate the classification model
-        y_pred = clf.predict(X_test_top)
-        y_proba = clf.predict_proba(X_test_top)[:, 1]  # Get probabilities for ROC AUC
+        y_pred = clf.predict(X_test)
+        y_proba = clf.predict_proba(X_test)[:, 1]  # Get probabilities for ROC AUC
         # Calculate metrics
         accuracy = accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred)
         cm = confusion_matrix(y_test, y_pred)
         auc_score = roc_auc_score(y_test, y_proba)
         # Save metrics to file
-        os.makedirs(results_path, exist_ok=True)
+        os.makedirs(results_dir, exist_ok=True)
         # Save accuracy and AUC scores
-        metrics_path = os.path.join(results_path, "classifier_metrics.txt")
+        metrics_path = os.path.join(results_dir, "classifier_metrics.txt")
         with open(metrics_path, "w") as f:
             f.write(f"Accuracy: {accuracy:.4f}\n")
             f.write(f"AUC: {auc_score:.4f}\n")
             f.write("\n")
         # Save classification report separately
-        report_path = os.path.join(results_path, "classifier_report.txt")
+        report_path = os.path.join(results_dir, "classifier_report.txt")
         with open(report_path, "w") as f:
             f.write(report)
         # Visualise and save confusion matrix
@@ -273,85 +414,14 @@ class UpperBodyClassifier:
         plt.title('Confusion Matrix')
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
-        cm_path = os.path.join(results_path, "confusion_matrix.png")
+        cm_path = os.path.join(results_dir, "confusion_matrix.png")
         plt.savefig(cm_path)
         plt.close()
 
-        return clf
-    
-    @staticmethod
-    def export_model(clf, results_path, event, datatype):
-        model_path = os.path.join(results_path, f"{datatype}_{event}_rf_classifier.pkl")
-        dump(clf, model_path)
-
-    @staticmethod
-    def feature_engineering(event, root_dir, datatype):
-        # Combine all functions involving DataFrame creation, feature extraction (no selection here)
-
-        # Folder directory for intermediate features
-        feat_dir = os.path.join("Z:/Upper Body/Results/10 Participants", datatype, "intermediate_features", event)
-        os.makedirs(feat_dir, exist_ok=True)
-        # Process each trial separately
-        all_features = []
-        all_labels = []
-        # Create DataFrame for upper body data for tsfresh (IMU or kinematics)
-        if datatype == "IMU":
-            data_iter = UpperBodyClassifier.upper_body_imu_for_event(event, os.path.join(root_dir, datatype))
-        elif datatype == "Kinematics":
-            data_iter = UpperBodyClassifier.upper_body_kinematics_for_event(event, os.path.join(root_dir, datatype))
-        # Get number of jobs for feature extraction
-        n_jobs_features = max(1, (multiprocessing.cpu_count() - 2) // 2)        
-        
-        # Read event labels from the Excel file
-        events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
-        # Process each trial
-        for i, trial_df in enumerate(data_iter):
-            # Get labels for this trial
-            y = UpperBodyClassifier.y_label_column(trial_df, event, events_dict=events_dict)
-            # Extract features from windowed data
-            X_feat, y_feat = UpperBodyClassifier.feature_extraction(trial_df, y, event, n_jobs=n_jobs_features, events_dict=events_dict)
-            # Save intermediate features
-            feat_file = os.path.join(feat_dir, f"trial_{i}_features.parquet")
-            X_feat.to_parquet(feat_file)            
-            all_features.append(X_feat)
-            all_labels.append(y_feat)            
-            print(f"Processed trial {i} - Shape: {X_feat.shape}")        
-        # Combine all features
-        X_combined = pd.concat(all_features, axis=0)
-        y_combined = pd.concat(all_labels, axis=0)
-        if y_combined.nunique() < 2:
-            raise RuntimeError("Labelling produces a single class. Check threshold and window size settings.")
-
-        return X_combined, y_combined
-    
-
-class UpperBodyPipeline:
-
-    @staticmethod
-    def process_event(event, root_dir, datatype, results_base):
-        
-        print(f"\n=== Starting EVENT: {event} ===")
-
-        # Build a results folder per event
-        safe_name = event.replace(" ", "_")
-        results_dir = os.path.join(results_base, safe_name)
-        os.makedirs(results_dir, exist_ok=True)
-
-        # IMU feature engineering algorithm outputting the extracted features and labels
-        print(f"[{event}] --> Loading {datatype} data ...")
-        X, y = UpperBodyClassifier.feature_engineering(event, root_dir, datatype)
-        print(f"[{event}] --> {datatype} feature matrix: {X.shape}, labels: {y.shape}")
-
-        # Train and test Random Forest Classifier model using top-100 features
-        print(f"[{event}] --> Training & testing {datatype} classifier ...")
-        clf = UpperBodyClassifier.train_and_test_classifier(X, y, results_dir, event, datatype)
-
-        # Export the final model
+        # Export model
         UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
-        print(f"[{event}] --> Classifier trained and saved.")
 
-        print(f"=== Finished EVENT: {event} ===\n")
-        return f"{event} done."
+        return clf, (train_pids, test_pids)
 
 
 class UpperBodyKinematics(Enum):
@@ -376,6 +446,8 @@ class UpperBodyIMU(Enum):
 
 
 if __name__ == "__main__":
+    from datetime import datetime
+
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
     datatypes = ["IMU", "Kinematics"]
@@ -383,68 +455,65 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
+    out_root = "Z:/Upper Body/Results/10 Participants/features"
+    models_root = "Z:/Upper Body/Results/10 Participants/models"
+    status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
+
+    # Toggles
+    RUN_EXTRACT_AND_SELECT = True
+    RUN_TRAINING = True
+
     # Reserve 2 cores for system stability, use remaining cores for processing
     total_cores = multiprocessing.cpu_count()
-    cores = max(1, total_cores - 2)  # Use all cores except 2 for system
+    events_n_jobs = max(1, total_cores - 2)
+    tsfresh_n_jobs = max(1, total_cores // events_n_jobs)
 
-    # Set parallel jobs for feature extraction
-    n_jobs_features = max(1, cores // 2)  # Use half of available cores for feature extraction
-    
-    print(f"System has {total_cores} cores. Using {cores} cores for processing, {n_jobs_features} for feature extraction.")
-    
-    # Create status file to indicate processing has started
-    status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
+    def write_status(path, msg):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")
+
+    os.makedirs(os.path.dirname(status_file), exist_ok=True)
     with open(status_file, 'w') as f:
-        f.write("Processing started: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")) 
-    
-    # Process one datatype at a time to manage memory
-    try:
-        for datatype in datatypes:
-            print(f"\nProcessing {datatype} data...")
-            try:
-                outputs = Parallel(n_jobs=cores, prefer="threads")(
-                    delayed(UpperBodyPipeline.process_event)(
-                        ev, 
-                        root_dir, 
-                        datatype,
-                        f"Z:/Upper Body/Results/10 Participants/{datatype}"
-                    )
-                    for ev in events
-                )
-                
-                # Force garbage collection between datatypes
-                import gc
-                gc.collect()
-                
-                for o in outputs:
-                    print(o)
-                    # Update status file after each datatype
-                    with open(status_file, 'a') as f:
-                        f.write(f"\nCompleted {datatype}: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
-                    
-            except MemoryError:
-                print(f"Memory error encountered. Reducing parallel processing...")
-                # Fallback to fewer cores if memory error occurs
-                cores_fallback = max(1, cores // 2)
-                outputs = Parallel(n_jobs=cores_fallback, prefer="threads")(
-                    delayed(UpperBodyPipeline.process_event)(
-                        ev, 
-                        root_dir, 
-                        datatype,
-                        f"Z:/Upper Body/Results/10 Participants/{datatype}"
-                    )
-                    for ev in events
-                )
-                
-                for o in outputs:
-                    print(o)
+        f.write(f"Run start: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
 
-        # Mark processing as complete
-        with open(status_file, 'a') as f:
-            f.write("\nProcessing completed successfully: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
+    try:
+        # Extract + Select
+        if RUN_EXTRACT_AND_SELECT:
+            for datatype in datatypes:
+                # Extract
+                write_status(status_file, f"[EXTRACT] {datatype} BEGIN")
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.extract_and_save_features)(
+                        ev, root_dir, datatype, out_root, tsfresh_n_jobs
+                    ) for ev in events
+                )
+                write_status(status_file, f"[EXTRACT] {datatype} END")
+
+                # Select
+                write_status(status_file, f"[SELECT] {datatype} BEGIN")
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.select_and_export_top_features)(
+                        out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_"))
+                    ) for ev in events
+                )
+                write_status(status_file, f"[SELECT] {datatype} END")
+
+        # Train/test from saved CSVs
+        if RUN_TRAINING:
+            for datatype in datatypes:
+                write_status(status_file, f"[TRAIN] {datatype} BEGIN")
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.train_and_test_classifier)(
+                        out_root, 
+                        datatype, 
+                        ev, 
+                        os.path.join(models_root, datatype, ev.replace(" ", "_"))
+                    ) for ev in events
+                )
+                write_status(status_file, f"[TRAIN] {datatype} END")
+
+        write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
     except Exception as e:
-        # Log any errors that occurred
-        with open(status_file, 'a') as f:
-            f.write(f"\nError occurred: {str(e)}\n" + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
-        raise  # Re-raise the exception after logging
+        write_status(status_file, f"Run failed: {e}")
+        raise
