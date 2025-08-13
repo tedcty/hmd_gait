@@ -8,6 +8,9 @@ class Requirements:
         print("Installing Requirements")
         os.system('python -m pip install build toml')
 
+        print("\n\tInstalling Opensim")
+        os.system('conda install -y -c opensim-org opensim')
+
         print("\n\tInstalling ABI-MMG's PTB package...")
         wget_spec = importlib.util.find_spec("wget")
         found = wget_spec is not None
