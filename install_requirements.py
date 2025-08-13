@@ -3,15 +3,19 @@ import importlib.util
 import sys
 
 class Requirements:
+    line = "##################################################"
     @staticmethod
     def windows_and_linux():
-        print("Installing Requirements")
-        os.system('python -m pip install build toml')
+        print("Installing Requirements:\n\nPlease ensure cuda sdk is not install in your computer. "
+              "Cuda sdk from the nvidia website will cause a conflict that will prevent numba from running.\n")
+        print("{0}\n\tInstalling tsfresh ...\n{0}".format(Requirements.line))
+        os.system("conda install -y conda-forge::tsfresh")
 
-        print("\n\tInstalling Opensim")
+        print("{0}\n\tInstalling Opensim ...\n{0}".format(Requirements.line))
         os.system('conda install -y -c opensim-org opensim')
 
-        print("\n\tInstalling ABI-MMG's PTB package...")
+        os.system('python -m pip install build toml')
+        print("{0}\n\tInstalling ABI-MMG's PTB package...\n{0}".format(Requirements.line))
         wget_spec = importlib.util.find_spec("wget")
         found = wget_spec is not None
         if not os.path.exists('./resources/wheels/ptb/'):
@@ -23,7 +27,7 @@ class Requirements:
         spam_spec = importlib.util.find_spec("wget")
         found = spam_spec is not None
         if found:
-            print("\nwget Installed and Available continue installation")
+            print("\nwget Installed and/or Available ... continuing installation")
         else:
             print("\nDone .... Please Rerun Script to continue!")
             sys.exit(0)
@@ -60,4 +64,4 @@ if __name__ == '__main__':
     else:
         print(f"Running on an unknown OS: {os_platform}")
 
-    print("Done!")
+    print("Done!\nPlease check whether the packages have been installed successfully.")
