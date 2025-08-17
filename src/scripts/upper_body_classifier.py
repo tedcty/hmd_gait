@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from enum import Enum
 import json
-from joblib import dump, Parallel, delayed
+from joblib import dump
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from ptb.ml.tags import MLKeys
@@ -463,10 +463,12 @@ if __name__ == "__main__":
     RUN_EXTRACT_AND_SELECT = True
     RUN_TRAINING = True
 
-    # Reserve 2 cores for system stability, use remaining cores for processing
+    # Reserve 2 cores for system stability, use remaining cores for feature extraction
     total_cores = multiprocessing.cpu_count()
-    events_n_jobs = max(1, total_cores - 2)
-    tsfresh_n_jobs = max(1, total_cores // events_n_jobs)
+    # No parallel events processing - run events sequentially
+    events_n_jobs = 1
+    # Use most available cores for feature extraction within each event
+    tsfresh_n_jobs = max(1, total_cores - 2)
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
@@ -482,34 +484,37 @@ if __name__ == "__main__":
             for datatype in datatypes:
                 # Extract
                 write_status(status_file, f"[EXTRACT] {datatype} BEGIN")
-                Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.extract_and_save_features)(
+                # Process events sequentially to use more cores for feature extraction
+                for ev in events:
+                    write_status(status_file, f"[EXTRACT] {datatype} - Processing event: {ev}")
+                    UpperBodyClassifier.extract_and_save_features(
                         ev, root_dir, datatype, out_root, tsfresh_n_jobs
-                    ) for ev in events
-                )
+                    )
                 write_status(status_file, f"[EXTRACT] {datatype} END")
 
                 # Select
                 write_status(status_file, f"[SELECT] {datatype} BEGIN")
-                Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.select_and_export_top_features)(
+                # Process events sequentially 
+                for ev in events:
+                    write_status(status_file, f"[SELECT] {datatype} - Processing event: {ev}")
+                    UpperBodyClassifier.select_and_export_top_features(
                         out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_"))
-                    ) for ev in events
-                )
+                    )
                 write_status(status_file, f"[SELECT] {datatype} END")
 
         # Train/test from saved CSVs
         if RUN_TRAINING:
             for datatype in datatypes:
                 write_status(status_file, f"[TRAIN] {datatype} BEGIN")
-                Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.train_and_test_classifier)(
+                # Process events sequentially
+                for ev in events:
+                    write_status(status_file, f"[TRAIN] {datatype} - Processing event: {ev}")
+                    UpperBodyClassifier.train_and_test_classifier(
                         out_root, 
                         datatype, 
                         ev, 
                         os.path.join(models_root, datatype, ev.replace(" ", "_"))
-                    ) for ev in events
-                )
+                    )
                 write_status(status_file, f"[TRAIN] {datatype} END")
 
         write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
