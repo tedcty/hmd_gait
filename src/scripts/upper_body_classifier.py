@@ -201,10 +201,10 @@ class UpperBodyClassifier:
         # Drop y before extracting features
         combined_windows = combined_windows.drop(columns=['y', 'trial', 'participant', 'trial_name'], errors='ignore')
 
-        # Extract features using tsfresh  NOTE: Currently using MinimalFCParameters
+        # Extract features using tsfresh  NOTE: Currently using ComprehensiveFCParameters
         X_feat, _ = MLOperations.extract_features_from_x(
             combined_windows,
-            fc_parameters=MLKeys.MFCParameters,
+            fc_parameters=MLKeys.CFCParameters,
             n_jobs=n_jobs
         )
 
