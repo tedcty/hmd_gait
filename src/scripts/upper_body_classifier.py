@@ -201,12 +201,13 @@ class UpperBodyClassifier:
         # Drop y before extracting features
         combined_windows = combined_windows.drop(columns=['y', 'trial', 'participant', 'trial_name'], errors='ignore')
 
-        # Extract features using tsfresh  NOTE: Currently using ComprehensiveFCParameters
+        # Extract features using tsfresh  NOTE: Currently using MinimalFCParameters
         X_feat, _ = MLOperations.extract_features_from_x(
             combined_windows,
-            fc_parameters=MLKeys.CFCParameters,
-            n_jobs=n_jobs)
-        
+            fc_parameters=MLKeys.MFCParameters,
+            n_jobs=n_jobs
+        )
+
         # Ensure index type matches string ids and align order
         X_feat.index = X_feat.index.astype(str)
         valid_ids = [i for i in window_ids if i in X_feat.index]
@@ -222,7 +223,7 @@ class UpperBodyClassifier:
         return X_feat, y_feat
     
     @staticmethod
-    def extract_and_save_features(event, root_dir, datatype, out_root, n_jobs_features):
+    def extract_and_save_features(event, root_dir, datatype, out_root, n_jobs_features, events_dict):
         # Choose data type
         if datatype == "IMU":
             data_iter = UpperBodyClassifier.upper_body_imu_for_event(event, os.path.join(root_dir, datatype))
@@ -230,8 +231,6 @@ class UpperBodyClassifier:
             data_iter = UpperBodyClassifier.upper_body_kinematics_for_event(event, os.path.join(root_dir, datatype))
         else:
             raise ValueError("data type must be 'IMU' or 'Kinematics'")
-        
-        events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
 
         for trial_df in data_iter:
             pid = trial_df['participant'].iloc[0]
@@ -432,8 +431,8 @@ class UpperBodyKinematics(Enum):
 
 
 class UpperBodyIMU(Enum):
-    head = "Head"
-    # left_forearm = "LeftForeArm"
+    # head = "Head"
+    left_forearm = "LeftForeArm"
     # right_forearm = "RightForeArm"
     # left_hand = "LeftHand"
     # right_hand = "RightHand"
@@ -463,10 +462,10 @@ if __name__ == "__main__":
     RUN_EXTRACT_AND_SELECT = True
     RUN_TRAINING = True
 
-    # Reserve 2 cores for system stability, use remaining cores for processing
+    # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
-    events_n_jobs = max(1, total_cores - 2)
-    tsfresh_n_jobs = max(1, total_cores // events_n_jobs)
+    events_n_jobs = 2
+    tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
@@ -476,6 +475,9 @@ if __name__ == "__main__":
     with open(status_file, 'w') as f:
         f.write(f"Run start: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
 
+    # Load event labels once at the start
+    events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
+
     try:
         # Extract + Select
         if RUN_EXTRACT_AND_SELECT:
@@ -484,7 +486,7 @@ if __name__ == "__main__":
                 write_status(status_file, f"[EXTRACT] {datatype} BEGIN")
                 Parallel(n_jobs=events_n_jobs, prefer="threads")(
                     delayed(UpperBodyClassifier.extract_and_save_features)(
-                        ev, root_dir, datatype, out_root, tsfresh_n_jobs
+                        ev, root_dir, datatype, out_root, tsfresh_n_jobs, events_dict
                     ) for ev in events
                 )
                 write_status(status_file, f"[EXTRACT] {datatype} END")
