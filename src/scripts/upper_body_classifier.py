@@ -274,9 +274,9 @@ class UpperBodyClassifier:
                         Yp = os.path.join(sensor_path, f"{stem}_y.csv")
                         if not os.path.exists(Yp):
                             continue
-                        X_df = pd.read_csv(Xp, index_col="window_id")
+                        X_df = pd.read_csv(Xp, index_col="window_id").astype(np.float32)  # Read as float32 to reduce memory use
                         y_df = pd.read_csv(Yp, index_col="window_id")
-                        y_sr = y_df.iloc[:, 0]
+                        y_sr = y_df.iloc[:, 0].astype(np.int8)
                         common_idx = X_df.index.intersection(y_sr.index)
                         if len(common_idx) == 0:
                             continue
@@ -287,8 +287,8 @@ class UpperBodyClassifier:
         if not X_list:
             raise RuntimeError("No CSV features found for given participants.")
         all_cols = sorted(set().union(*[df.columns for df in X_list]))
-        X_all = pd.concat([df.reindex(columns=all_cols, fill_value=0) for df in X_list], axis=0)
-        y_all = pd.concat(y_list, axis=0)
+        X_all = pd.concat([df.reindex(columns=all_cols, fill_value=0) for df in X_list], axis=0).astype(np.float32)
+        y_all = pd.concat(y_list, axis=0).astype(np.int8)
         return X_all, y_all
     
     @staticmethod
@@ -459,8 +459,9 @@ if __name__ == "__main__":
     status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
 
     # Toggles
-    RUN_EXTRACT_AND_SELECT = True
-    RUN_TRAINING = True
+    RUN_EXTRACT = False
+    RUN_SELECT = True
+    RUN_TRAINING = False
 
     # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
@@ -479,8 +480,8 @@ if __name__ == "__main__":
     events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
 
     try:
-        # Extract + Select
-        if RUN_EXTRACT_AND_SELECT:
+        # Extract
+        if RUN_EXTRACT:
             for datatype in datatypes:
                 # Extract
                 write_status(status_file, f"[EXTRACT] {datatype} BEGIN")
@@ -491,13 +492,14 @@ if __name__ == "__main__":
                 )
                 write_status(status_file, f"[EXTRACT] {datatype} END")
 
-                # Select
+        # Select
+        if RUN_SELECT:
+            for datatype in datatypes:
                 write_status(status_file, f"[SELECT] {datatype} BEGIN")
-                Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.select_and_export_top_features)(
+                for ev in events:
+                    UpperBodyClassifier.select_and_export_top_features(
                         out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_"))
-                    ) for ev in events
-                )
+                    )
                 write_status(status_file, f"[SELECT] {datatype} END")
 
         # Train/test from saved CSVs
