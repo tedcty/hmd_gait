@@ -3,8 +3,18 @@ import copy
 import numpy as np
 import pandas as pd
 
+from tsfresh.transformers.feature_selector import FeatureSelector
+from tsfresh.feature_extraction.settings import from_columns
+
 from ptb.core import Yatsdo
 from ptb.ml.ml_util import MLOperations, MLKeys
+
+from sklearn.ensemble import RandomForestClassifier
+
+
+"""
+This package contains code adapted from MLOperations for classifiers.
+"""
 
 
 class MetaMarkerSet(Enum):
@@ -31,13 +41,32 @@ class EventTypes(Enum):
     stairs_descent = 4 # step down at least one step
     step_over = 5
 
+    def to_string(self):
+        return str(self.name)
+
+    @staticmethod
+    def get(x:str):
+        for i in EventTypes:
+            if x.lower() in str(i.name):
+                return i
+        return None
+
 
 class GaitMLClassifier:
     def __init__(self):
-        pass
+        self.clf:RandomForestClassifier = None
 
-    def train(self, x, y):
-        pass
+    def train(self, X, y):
+        self.clf = RandomForestClassifier(max_depth=2, random_state=0)
+        self.clf.fit(X, y)
+
+    def predict(self, X):
+        return self.clf.predict(X)
+
+    def importance(self, num_of_feat=100):
+        most_important = self.clf.feature_importances_.sort_values(ascending=False).head(num_of_feat)
+        feature_names = from_columns(most_important.index)
+        return most_important, feature_names
 
 class FeatureSet:
     def __init__(self):
@@ -67,13 +96,14 @@ class FeatureSet:
         :param windows: the list of windows to combine
         :return: a data frame of windows with the included window ids
         """
-        cols = ref.column_labels
+        cols = copy.deepcopy(ref.column_labels)
         cols.insert(0, 'id')
         window_id = 1
         updated_windows = []
         for w in windows:
             n = np.zeros([w.shape[0], w.shape[1]+1])
             n[:, 0] = window_id
+            n[:, 1:] = w
             window_id += 1
             updated_windows.append(n)
         nstack = np.vstack(updated_windows)
@@ -86,8 +116,17 @@ class FeatureSet:
         :param windows: a dataframe of windows as outlined by tsfresh
         :return: None, this method save the features in a dictionary
         """
-        efx, param = MLOperations.extract_features_from_x(windows, fc_parameters=MLKeys.MFCParameters)
+        # efx, param = MLOperations.extract_features_from_x(windows, fc_parameters=MLKeys.MFCParameters)
+        efx, param = MLOperations.extract_features_from_x(windows, fc_parameters=MLKeys.CFCParameters)
         self.features[data_name] = [efx, param]
 
-
+    def feature_select(self, y):
+        ret = {}
+        for m in self.features:
+            efx = self.features[m]
+            selector = FeatureSelector()
+            y.index = efx.index
+            fc_selected = selector.fit_transform(efx, y)
+            ret[m] = fc_selected
+        return ret
 
