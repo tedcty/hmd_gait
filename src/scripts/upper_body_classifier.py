@@ -338,10 +338,34 @@ class UpperBodyClassifier:
         # Feature selection
         selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train)
 
-        top100 = MLOperations.select_top_features_from_x(importances, num_of_feat=100)
-        top100 = top100["pfx"]
+        # Filter out duplicate feature types, keeping only the highest importance
+        def get_feature_base_name(feature_name):
+            """Extract the base feature name without the parameter value at the end"""
+            import re
+            # Remove parameter values like __q_0.8, __coeff_0, __lag_1, etc.
+            # This regex removes the last parameter that starts with a number or decimal
+            pattern = r'__[^_]*\d+(?:\.\d+)?$'
+            base_name = re.sub(pattern, '', feature_name)
+            return base_name
+        
+        # Group features by their base name and keep only the one with highest importance
+        feature_groups = {}
+        for feature_name, importance in importances.items():
+            base_name = get_feature_base_name(feature_name)
+            if base_name not in feature_groups or importance > feature_groups[base_name][1]:
+                feature_groups[base_name] = (feature_name, importance)  # Keep original full name
+        
+        # Create filtered importances series with only the best feature from each group
+        # This preserves the original complete feature names
+        filtered_importances = pd.Series(
+            {original_name: importance for original_name, importance in feature_groups.values()},
+            name=importances.name
+        )
+        
+        # Sort by importance and take top 100
+        top100_filtered = filtered_importances.sort_values(ascending=False).head(100)
 
-        # Export IMU top features with importances to JSON
+        # Export filtered top features with importances to JSON
         final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
         
         # Modified function from ptb to order features by importance not alphabetical
@@ -349,8 +373,8 @@ class UpperBodyClassifier:
             with open(filepath, 'w') as outfile:
                 json.dump(ef, outfile, indent=4)
 
-        export_features_json(importances[top100].to_dict(), final_feat_path)
-        print(f"Found Top 100 {datatype} features by importance.")
+        export_features_json(top100_filtered.to_dict(), final_feat_path)
+        print(f"Found Top 100 {datatype} features by importance (filtered for duplicates).")
 
         return train_pids, test_pids
     
@@ -432,8 +456,8 @@ class UpperBodyKinematics(Enum):
 
 class UpperBodyIMU(Enum):
     # head = "Head"
-    left_forearm = "LeftForeArm"
-    # right_forearm = "RightForeArm"
+    # left_forearm = "LeftForeArm"
+    right_forearm = "RightForeArm"
     # left_hand = "LeftHand"
     # right_hand = "RightHand"
     # left_shoulder = "LeftShoulder"
@@ -459,7 +483,7 @@ if __name__ == "__main__":
     status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
 
     # Toggles
-    RUN_EXTRACT = False
+    RUN_EXTRACT = True
     RUN_SELECT = True
     RUN_TRAINING = False
 
