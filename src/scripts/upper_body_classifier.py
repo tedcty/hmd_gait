@@ -54,7 +54,13 @@ class UpperBodyClassifier:
                         imu_df = imu_df.rename(columns=rename_map)
                         # Add participant and trial name
                         imu_df['participant'] = pid
-                        trial_name = file.removesuffix("_imu_vec3_2_raw.csv")
+                        # Remove either "_imu_vec3_2_raw.csv" or "_imu_vec3_raw.csv" as appropriate
+                        if file.endswith("_imu_vec3_2_raw.csv"):
+                            trial_name = file.removesuffix("_imu_vec3_2_raw.csv")
+                        elif file.endswith("_imu_vec3_raw.csv"):
+                            trial_name = file.removesuffix("_imu_vec3_raw.csv")
+                        else:
+                            trial_name = file  # fallback, should not happen
                         imu_df['trial_name'] = trial_name
                         # Put 'id' first
                         cols = ['id', 'participant', 'trial_name'] + [col for col in imu_df.columns if col not in ['id', 'participant', 'trial_name']]
