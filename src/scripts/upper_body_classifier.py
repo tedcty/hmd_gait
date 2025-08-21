@@ -265,6 +265,9 @@ class UpperBodyClassifier:
     def load_features_for_participants(out_root, datatype, event, participants):
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         X_list, y_list = [], []
+        all_cols_set = set()
+        
+        # First pass: collect all DataFrames and determine all columns
         for pid in participants:
             pid_path = os.path.join(base, pid)
             if not os.path.isdir(pid_path):
@@ -280,7 +283,8 @@ class UpperBodyClassifier:
                         Yp = os.path.join(sensor_path, f"{stem}_y.csv")
                         if not os.path.exists(Yp):
                             continue
-                        X_df = pd.read_csv(Xp, index_col="window_id")
+                        # Read with float32
+                        X_df = pd.read_csv(Xp, index_col="window_id", dtype=np.float32)
                         y_df = pd.read_csv(Yp, index_col="window_id")
                         y_sr = y_df.iloc[:, 0].astype(np.int8)
                         common_idx = X_df.index.intersection(y_sr.index)
@@ -288,17 +292,31 @@ class UpperBodyClassifier:
                             continue
                         X_df = X_df.loc[common_idx]
                         y_sr = y_sr.loc[common_idx]
+                        all_cols_set.update(X_df.columns)
                         X_list.append(X_df)
                         y_list.append(y_sr)
+        
         if not X_list:
             raise RuntimeError("No CSV features found for given participants.")
-        all_cols = sorted(set().union(*[df.columns for df in X_list]))
-        # First reindex all DataFrames to have the same columns, then convert to float32
-        X_reindexed = [df.reindex(columns=all_cols, fill_value=0.0) for df in X_list]
-        # Convert each DataFrame to float32 before concatenation
-        X_float32 = [df.astype(np.float32) for df in X_reindexed]
-        X_all = pd.concat(X_float32, axis=0)
+        
+        all_cols = sorted(all_cols_set)
+        
+        # Process in smaller batches to avoid memory issues
+        batch_size = 10  # Process 10 DataFrames at a time
+        X_batches = []
+        
+        for i in range(0, len(X_list), batch_size):
+            batch = X_list[i:i + batch_size]
+            # Reindex batch DataFrames
+            batch_reindexed = [df.reindex(columns=all_cols, fill_value=0.0) for df in batch]
+            # Concatenate this batch
+            batch_concat = pd.concat(batch_reindexed, axis=0)
+            X_batches.append(batch_concat)
+        
+        # Concatenate all batches
+        X_all = pd.concat(X_batches, axis=0)
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
+        
         return X_all, y_all
     
     @staticmethod
