@@ -305,9 +305,9 @@ class UpperBodyClassifier:
         
         all_cols = sorted(all_cols_set)
         
-        # Process in smaller batches to avoid memory issues
-        batch_size = 10  # Process 10 DataFrames at a time
-        X_batches = []
+        # Incremental concatenation to avoid memory issues
+        X_all = None
+        batch_size = 5  # Reduced batch size
         
         for i in range(0, len(X_list), batch_size):
             batch = X_list[i:i + batch_size]
@@ -315,10 +315,16 @@ class UpperBodyClassifier:
             batch_reindexed = [df.reindex(columns=all_cols, fill_value=0.0) for df in batch]
             # Concatenate this batch
             batch_concat = pd.concat(batch_reindexed, axis=0)
-            X_batches.append(batch_concat)
-        
-        # Concatenate all batches
-        X_all = pd.concat(X_batches, axis=0)
+            
+            # Incrementally build the final DataFrame
+            if X_all is None:
+                X_all = batch_concat
+            else:
+                X_all = pd.concat([X_all, batch_concat], axis=0)
+            
+            # Force garbage collection after each batch
+            import gc
+            gc.collect()
         
         # Convert only numeric columns to float32 in the final result
         numeric_cols = X_all.select_dtypes(include=[np.number]).columns
