@@ -280,7 +280,7 @@ class UpperBodyClassifier:
                         Yp = os.path.join(sensor_path, f"{stem}_y.csv")
                         if not os.path.exists(Yp):
                             continue
-                        X_df = pd.read_csv(Xp, index_col="window_id").astype(np.float32)  # Read as float32 to reduce memory use
+                        X_df = pd.read_csv(Xp, index_col="window_id")
                         y_df = pd.read_csv(Yp, index_col="window_id")
                         y_sr = y_df.iloc[:, 0].astype(np.int8)
                         common_idx = X_df.index.intersection(y_sr.index)
@@ -293,7 +293,11 @@ class UpperBodyClassifier:
         if not X_list:
             raise RuntimeError("No CSV features found for given participants.")
         all_cols = sorted(set().union(*[df.columns for df in X_list]))
-        X_all = pd.concat([df.reindex(columns=all_cols, fill_value=0) for df in X_list], axis=0).astype(np.float32)
+        # First reindex all DataFrames to have the same columns, then convert to float32
+        X_reindexed = [df.reindex(columns=all_cols, fill_value=0.0) for df in X_list]
+        # Convert each DataFrame to float32 before concatenation
+        X_float32 = [df.astype(np.float32) for df in X_reindexed]
+        X_all = pd.concat(X_float32, axis=0)
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
         return X_all, y_all
     
@@ -479,7 +483,8 @@ if __name__ == "__main__":
 
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
-    datatypes = ["IMU", "Kinematics"]
+    # datatypes = ["IMU", "Kinematics"]
+    datatypes = ["IMU"]
 
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
@@ -489,7 +494,7 @@ if __name__ == "__main__":
     status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
 
     # Toggles
-    RUN_EXTRACT = True
+    RUN_EXTRACT = False
     RUN_SELECT = True
     RUN_TRAINING = False
 
