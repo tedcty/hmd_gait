@@ -307,7 +307,7 @@ class UpperBodyClassifier:
         
         # Incremental concatenation to avoid memory issues
         X_all = None
-        batch_size = 5  # Reduced batch size
+        batch_size = 20  # Reduced batch size
         
         for i in range(0, len(X_list), batch_size):
             batch = X_list[i:i + batch_size]
