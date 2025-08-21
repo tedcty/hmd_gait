@@ -292,7 +292,7 @@ class UpperBodyClassifier:
                         X_df = X_df.loc[common_idx]
                         y_sr = y_sr.loc[common_idx]
                         
-                        # Convert numeric columns to float32
+                        # Convert numeric columns to float32 immediately
                         numeric_cols = X_df.select_dtypes(include=[np.number]).columns
                         X_df[numeric_cols] = X_df[numeric_cols].astype(np.float32)
                         
@@ -305,14 +305,21 @@ class UpperBodyClassifier:
         
         all_cols = sorted(all_cols_set)
         
-        # Incremental concatenation to avoid memory issues
+        # Small batches for the large dataset
         X_all = None
-        batch_size = 150
+        batch_size = 15
         
         for i in range(0, len(X_list), batch_size):
             batch = X_list[i:i + batch_size]
             # Reindex batch DataFrames
-            batch_reindexed = [df.reindex(columns=all_cols, fill_value=0.0) for df in batch]
+            batch_reindexed = [df.reindex(columns=all_cols, fill_value=np.float32(0.0)) for df in batch]
+            
+            # Ensure all data is float32 before concatenation
+            for j, df in enumerate(batch_reindexed):
+                numeric_cols = df.select_dtypes(include=[np.number]).columns
+                df[numeric_cols] = df[numeric_cols].astype(np.float32)
+                batch_reindexed[j] = df
+            
             # Concatenate this batch
             batch_concat = pd.concat(batch_reindexed, axis=0)
             
@@ -325,10 +332,9 @@ class UpperBodyClassifier:
             # Force garbage collection after each batch
             import gc
             gc.collect()
-        
-        # Convert only numeric columns to float32 in the final result
-        numeric_cols = X_all.select_dtypes(include=[np.number]).columns
-        X_all[numeric_cols] = X_all[numeric_cols].astype(np.float32)
+            
+            print(f"Processed batch {i//batch_size + 1}/{(len(X_list) + batch_size - 1)//batch_size}, "
+                  f"Current shape: {X_all.shape}")
         
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
         
