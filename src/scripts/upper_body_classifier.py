@@ -307,7 +307,7 @@ class UpperBodyClassifier:
         
         # Incremental concatenation to avoid memory issues
         X_all = None
-        batch_size = 20  # Reduced batch size
+        batch_size = 150
         
         for i in range(0, len(X_list), batch_size):
             batch = X_list[i:i + batch_size]
@@ -535,8 +535,8 @@ if __name__ == "__main__":
     total_cores = multiprocessing.cpu_count()
     events_n_jobs = 2
     tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
-    # Calculate cores for feature selection (used within each event)
-    selector_n_jobs = max(1, tsfresh_n_jobs // 2)  # Use // 2 for more conservative approach
+    # Use even more cores for feature selection (since it's less memory intensive than extraction)
+    selector_n_jobs = min(total_cores - 1, tsfresh_n_jobs * 2)  # Cap at total-1 cores
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
