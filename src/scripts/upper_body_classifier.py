@@ -283,8 +283,7 @@ class UpperBodyClassifier:
                         Yp = os.path.join(sensor_path, f"{stem}_y.csv")
                         if not os.path.exists(Yp):
                             continue
-                        # Read with float32
-                        X_df = pd.read_csv(Xp, index_col="window_id", dtype=np.float32)
+                        X_df = pd.read_csv(Xp, index_col="window_id")
                         y_df = pd.read_csv(Yp, index_col="window_id")
                         y_sr = y_df.iloc[:, 0].astype(np.int8)
                         common_idx = X_df.index.intersection(y_sr.index)
@@ -292,6 +291,11 @@ class UpperBodyClassifier:
                             continue
                         X_df = X_df.loc[common_idx]
                         y_sr = y_sr.loc[common_idx]
+                        
+                        # Convert numeric columns to float32
+                        numeric_cols = X_df.select_dtypes(include=[np.number]).columns
+                        X_df[numeric_cols] = X_df[numeric_cols].astype(np.float32)
+                        
                         all_cols_set.update(X_df.columns)
                         X_list.append(X_df)
                         y_list.append(y_sr)
@@ -315,6 +319,11 @@ class UpperBodyClassifier:
         
         # Concatenate all batches
         X_all = pd.concat(X_batches, axis=0)
+        
+        # Convert only numeric columns to float32 in the final result
+        numeric_cols = X_all.select_dtypes(include=[np.number]).columns
+        X_all[numeric_cols] = X_all[numeric_cols].astype(np.float32)
+        
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
         
         return X_all, y_all
