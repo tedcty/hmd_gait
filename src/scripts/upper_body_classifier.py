@@ -344,12 +344,12 @@ class UpperBodyClassifier:
         return train_pids, test_pids
 
     @staticmethod
-    def feature_selection(X_train, y_train):
+    def feature_selection(X_train, y_train, n_jobs=1):
         # Select statistically significant features using tsfresh's FeatureSelector transformer
-        selector = FeatureSelector()
+        selector = FeatureSelector(n_jobs=n_jobs)  # Add n_jobs parameter
         X_train_sel = selector.fit_transform(X_train, y_train)
         # Fit a RandomForestClassifier on the selected features
-        rf = RandomForestClassifier()
+        rf = RandomForestClassifier(n_jobs=n_jobs)  # Also parallelize RF
         rf.fit(X_train_sel, y_train)
         # Get feature importances
         importances = pd.Series(rf.feature_importances_, X_train_sel.columns)
@@ -361,7 +361,7 @@ class UpperBodyClassifier:
         dump(clf, model_path)
 
     @staticmethod
-    def select_and_export_top_features(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
+    def select_and_export_top_features(out_root, datatype, event, results_dir, selector_n_jobs=1, train_pids=None, test_pids=None):
         # Load saved CSV features, do train-only selection, export top-100
         os.makedirs(results_dir, exist_ok=True)
 
@@ -378,8 +378,8 @@ class UpperBodyClassifier:
         # Load features only for train participants
         X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
 
-        # Feature selection
-        selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train)
+        # Feature selection with parallel processing
+        selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train, n_jobs=selector_n_jobs)
 
         # Filter out duplicate feature types, keeping only the highest importance
         def get_feature_base_name(feature_name):
@@ -535,6 +535,8 @@ if __name__ == "__main__":
     total_cores = multiprocessing.cpu_count()
     events_n_jobs = 2
     tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
+    # Calculate cores for feature selection (used within each event)
+    selector_n_jobs = max(1, tsfresh_n_jobs // 2)  # Use // 2 for more conservative approach
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
@@ -564,10 +566,12 @@ if __name__ == "__main__":
         if RUN_SELECT:
             for datatype in datatypes:
                 write_status(status_file, f"[SELECT] {datatype} BEGIN")
-                for ev in events:
-                    UpperBodyClassifier.select_and_export_top_features(
-                        out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_"))
-                    )
+                # Parallelize feature selection like extraction and training
+                Parallel(n_jobs=events_n_jobs, prefer="threads")(
+                    delayed(UpperBodyClassifier.select_and_export_top_features)(
+                        out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_")), selector_n_jobs
+                    ) for ev in events
+                )
                 write_status(status_file, f"[SELECT] {datatype} END")
 
         # Train/test from saved CSVs
