@@ -389,12 +389,12 @@ class UpperBodyClassifier:
 
         # Filter out duplicate feature types, keeping only the highest importance
         def get_feature_base_name(feature_name):
-            """Extract the base feature name without the parameter value at the end"""
+            """Extract the base feature name without any parameter values"""
             import re
-            # Remove parameter values like __q_0.8, __coeff_0, __lag_1, etc.
-            # This regex removes the last parameter that starts with a number or decimal
-            pattern = r'__[^_]*\d+(?:\.\d+)?$'
-            base_name = re.sub(pattern, '', feature_name)
+            # Remove only numeric parameter values, keep quoted attribute names
+            # This handles: chunk_len_5, coeff_2, q_0.4, etc.
+            base_name = re.sub(r'__[^_]*_\d+(?:\.\d+)?', '', feature_name)
+            
             return base_name
         
         # Group features by their base name and keep only the one with highest importance
