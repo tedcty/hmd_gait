@@ -510,9 +510,9 @@ class UpperBodyKinematics(Enum):
 class UpperBodyIMU(Enum):
     # head = "Head"
     # left_forearm = "LeftForeArm"
-    right_forearm = "RightForeArm"
+    # right_forearm = "RightForeArm"
     # left_hand = "LeftHand"
-    # right_hand = "RightHand"
+    right_hand = "RightHand"
     # left_shoulder = "LeftShoulder"
     # right_shoulder = "RightShoulder"
     # left_upper_arm = "LeftUpperArm"
@@ -537,8 +537,8 @@ if __name__ == "__main__":
     status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
 
     # Toggles
-    RUN_EXTRACT = False
-    RUN_SELECT = True
+    RUN_EXTRACT = True
+    RUN_SELECT = False
     RUN_TRAINING = False
 
     # 2 events in parallel, more cores per tsfresh
