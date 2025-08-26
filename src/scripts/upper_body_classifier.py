@@ -305,38 +305,20 @@ class UpperBodyClassifier:
         
         all_cols = sorted(all_cols_set)
         
-        # Small batches for the large dataset
-        X_all = None
-        batch_size = 15
+        # Reindex all DataFrames to have consistent columns
+        X_list_reindexed = [df.reindex(columns=all_cols, fill_value=np.float32(0.0)) for df in X_list]
         
-        for i in range(0, len(X_list), batch_size):
-            batch = X_list[i:i + batch_size]
-            # Reindex batch DataFrames
-            batch_reindexed = [df.reindex(columns=all_cols, fill_value=np.float32(0.0)) for df in batch]
-            
-            # Ensure all data is float32 before concatenation
-            for j, df in enumerate(batch_reindexed):
-                numeric_cols = df.select_dtypes(include=[np.number]).columns
-                df[numeric_cols] = df[numeric_cols].astype(np.float32)
-                batch_reindexed[j] = df
-            
-            # Concatenate this batch
-            batch_concat = pd.concat(batch_reindexed, axis=0)
-            
-            # Incrementally build the final DataFrame
-            if X_all is None:
-                X_all = batch_concat
-            else:
-                X_all = pd.concat([X_all, batch_concat], axis=0)
-            
-            # Force garbage collection after each batch
-            import gc
-            gc.collect()
-            
-            print(f"Processed batch {i//batch_size + 1}/{(len(X_list) + batch_size - 1)//batch_size}, "
-                  f"Current shape: {X_all.shape}")
+        # Ensure all data is float32 before concatenation
+        for i, df in enumerate(X_list_reindexed):
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            df[numeric_cols] = df[numeric_cols].astype(np.float32)
+            X_list_reindexed[i] = df
         
+        # Concatenate all DataFrames at once
+        X_all = pd.concat(X_list_reindexed, axis=0)
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
+        
+        print(f"Loaded features shape: {X_all.shape}")
         
         return X_all, y_all
     
@@ -499,6 +481,115 @@ class UpperBodyClassifier:
 
         return clf, (train_pids, test_pids)
 
+    @staticmethod
+    def select_train_and_test_classifier(out_root, datatype, event, results_dir, selector_n_jobs=1, train_pids=None, test_pids=None):
+        
+        os.makedirs(results_dir, exist_ok=True)
+
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        if train_pids is None or test_pids is None:
+            train_pids, test_pids = UpperBodyClassifier.split_participants(base, train_size=0.8, random_state=42)
+        
+        # Save participant splits
+        with open(os.path.join(results_dir, "train_pids.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(list(train_pids)), f, indent=2)
+        with open(os.path.join(results_dir, "test_pids.json"), "w", encoding="utf-8") as f:
+            json.dump(sorted(list(test_pids)), f, indent=2)
+
+        # Load features for both train and test sets
+        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
+        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
+
+        # Feature selection on training data only
+        selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train, n_jobs=selector_n_jobs)
+
+        # Filter out duplicate feature types, keeping only the highest importance
+        def get_feature_base_name(feature_name):
+            import re
+            parts = feature_name.split('__')
+            cleaned = []
+            for p in parts:
+                if '_' in p:
+                    key, val = p.rsplit('_', 1)  # paramName_value
+                    if re.fullmatch(r'-?\d+(?:\.\d+)?', val):
+                        p = key  # drop numeric value, keep param name (e.g., 'chunk_len')
+                cleaned.append(p)
+            return '__'.join(cleaned)
+
+        # Group features by their base name and keep only the one with highest importance
+        feature_groups = {}
+        for feature_name, importance in importances.items():
+            base_name = get_feature_base_name(feature_name)
+            if base_name not in feature_groups or importance > feature_groups[base_name][1]:
+                feature_groups[base_name] = (feature_name, importance)  # Keep original full name
+        
+        # Create filtered importances series with only the best feature from each group
+        filtered_importances = pd.Series(
+            {original_name: importance for original_name, importance in feature_groups.values()},
+            name=importances.name
+        )
+        
+        # Sort by importance and take top 100
+        top100_filtered = filtered_importances.sort_values(ascending=False).head(100)
+
+        # Export filtered top features with importances to JSON
+        final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
+        
+        def export_features_json(ef: dict, filepath):
+            with open(filepath, 'w') as outfile:
+                json.dump(ef, outfile, indent=4)
+
+        export_features_json(top100_filtered.to_dict(), final_feat_path)
+        print(f"Found Top 100 {datatype} features by importance (filtered for duplicates).")
+
+        # Get top feature names in order of importance
+        top_names = list(top100_filtered.index)
+        
+        # Restrict both train and test to top 100 columns
+        X_train_top = X_train.reindex(columns=top_names, fill_value=0)
+        X_test_top = X_test.reindex(columns=top_names, fill_value=0)
+
+        # Train and evaluate classifier
+        clf = RandomForestClassifier()
+        clf.fit(X_train_top, y_train)
+        
+        # Evaluate the classification model
+        y_pred = clf.predict(X_test_top)
+        y_proba = clf.predict_proba(X_test_top)[:, 1]  # Get probabilities for ROC AUC
+        
+        # Calculate metrics
+        accuracy = accuracy_score(y_test, y_pred)
+        report = classification_report(y_test, y_pred)
+        cm = confusion_matrix(y_test, y_pred)
+        auc_score = roc_auc_score(y_test, y_proba)
+        
+        # Save metrics to file
+        metrics_path = os.path.join(results_dir, "classifier_metrics.txt")
+        with open(metrics_path, "w") as f:
+            f.write(f"Accuracy: {accuracy:.4f}\n")
+            f.write(f"AUC: {auc_score:.4f}\n")
+            f.write("\n")
+        
+        # Save classification report separately
+        report_path = os.path.join(results_dir, "classifier_report.txt")
+        with open(report_path, "w") as f:
+            f.write(report)
+        
+        # Visualise and save confusion matrix
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title('Confusion Matrix')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        cm_path = os.path.join(results_dir, "confusion_matrix.png")
+        plt.savefig(cm_path)
+        plt.close()
+
+        # Export model
+        UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
+
+        return clf, (train_pids, test_pids)
+
 
 class UpperBodyKinematics(Enum):
     pelvis = ["pelvis_tilt", "pelvis_list", "pelvis_rotation", "pelvis_tx", "pelvis_ty", "pelvis_tz"]
@@ -538,8 +629,7 @@ if __name__ == "__main__":
 
     # Toggles
     RUN_EXTRACT = True
-    RUN_SELECT = False
-    RUN_TRAINING = False
+    RUN_SELECT_AND_TRAIN = True
 
     # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
@@ -572,31 +662,20 @@ if __name__ == "__main__":
                 )
                 write_status(status_file, f"[EXTRACT] {datatype} END")
 
-        # Select
-        if RUN_SELECT:
+        # Combined select and train/test
+        if RUN_SELECT_AND_TRAIN:
             for datatype in datatypes:
-                write_status(status_file, f"[SELECT] {datatype} BEGIN")
-                # Parallelize feature selection like extraction and training
+                write_status(status_file, f"[SELECT+TRAIN] {datatype} BEGIN")
                 Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.select_and_export_top_features)(
-                        out_root, datatype, ev, os.path.join(models_root, datatype, ev.replace(" ", "_")), selector_n_jobs
-                    ) for ev in events
-                )
-                write_status(status_file, f"[SELECT] {datatype} END")
-
-        # Train/test from saved CSVs
-        if RUN_TRAINING:
-            for datatype in datatypes:
-                write_status(status_file, f"[TRAIN] {datatype} BEGIN")
-                Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.train_and_test_classifier)(
+                    delayed(UpperBodyClassifier.select_train_and_test_classifier)(
                         out_root, 
                         datatype, 
                         ev, 
-                        os.path.join(models_root, datatype, ev.replace(" ", "_"))
+                        os.path.join(models_root, datatype, ev.replace(" ", "_")),
+                        selector_n_jobs
                     ) for ev in events
                 )
-                write_status(status_file, f"[TRAIN] {datatype} END")
+                write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
 
         write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
