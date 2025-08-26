@@ -482,7 +482,7 @@ class UpperBodyClassifier:
         return clf, (train_pids, test_pids)
 
     @staticmethod
-    def select_train_and_test_classifier(out_root, datatype, event, results_dir, selector_n_jobs=1, train_pids=None, test_pids=None):
+    def select_train_and_test_classifier(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, train_pids=None, test_pids=None):
         
         os.makedirs(results_dir, exist_ok=True)
 
@@ -550,7 +550,7 @@ class UpperBodyClassifier:
         X_test_top = X_test.reindex(columns=top_names, fill_value=0)
 
         # Train and evaluate classifier
-        clf = RandomForestClassifier()
+        clf = RandomForestClassifier(n_jobs=rf_n_jobs)
         clf.fit(X_train_top, y_train)
         
         # Evaluate the classification model
@@ -635,8 +635,10 @@ if __name__ == "__main__":
     total_cores = multiprocessing.cpu_count()
     events_n_jobs = 2
     tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
-    # Use even more cores for feature selection (since it's less memory intensive than extraction)
-    selector_n_jobs = min(total_cores - 1, tsfresh_n_jobs * 2)  # Cap at total-1 cores
+    # Both selection and training get equal core allocation
+    cores_per_event = max(1, total_cores // events_n_jobs)
+    selector_n_jobs = cores_per_event
+    rf_n_jobs = cores_per_event
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
@@ -672,7 +674,8 @@ if __name__ == "__main__":
                         datatype, 
                         ev, 
                         os.path.join(models_root, datatype, ev.replace(" ", "_")),
-                        selector_n_jobs
+                        selector_n_jobs,
+                        rf_n_jobs
                     ) for ev in events
                 )
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
