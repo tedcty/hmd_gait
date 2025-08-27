@@ -603,8 +603,8 @@ class UpperBodyIMU(Enum):
     # left_forearm = "LeftForeArm"
     # right_forearm = "RightForeArm"
     # left_hand = "LeftHand"
-    right_hand = "RightHand"
-    # left_shoulder = "LeftShoulder"
+    # right_hand = "RightHand"
+    left_shoulder = "LeftShoulder"
     # right_shoulder = "RightShoulder"
     # left_upper_arm = "LeftUpperArm"
     # right_upper_arm = "RightUpperArm"
@@ -629,7 +629,7 @@ if __name__ == "__main__":
 
     # Toggles
     RUN_EXTRACT = True
-    RUN_SELECT_AND_TRAIN = True
+    RUN_SELECT_AND_TRAIN = False
 
     # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
