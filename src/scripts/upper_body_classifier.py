@@ -9,8 +9,8 @@ from ptb.util.math.filters import Butterworth
 from ptb.ml.tags import MLKeys
 from tsfresh.transformers import FeatureSelector
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
+from sklearn.model_selection import KFold, GroupKFold
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, precision_recall_fscore_support, roc_curve, auc
 import matplotlib.pyplot as plt
 import seaborn as sns
 import multiprocessing
@@ -22,6 +22,9 @@ class UpperBodyClassifier:
 
     @staticmethod
     def upper_body_imu_for_event(event, root_dir):
+        """
+        Generate DataFrames for upper body IMU data for a specific event.
+        """
         # Create DataFrame for upper body IMU data based on the event that can be used for tsfresh feature extraction
         # Search for the event in each participant folder in the root directory
         for pid in os.listdir(root_dir):
@@ -70,6 +73,9 @@ class UpperBodyClassifier:
     
     @staticmethod
     def upper_body_kinematics_for_event(event, root_dir):
+        """
+        Generate DataFrames for upper body kinematics data for a specific event.
+        """
         # Create DataFrame for upper body kinematics data based on the event that can be used for tsfresh feature extraction
         # Flatten the list of all upper body kinematics columns
         kin_cols = [col_name for kinematic in UpperBodyKinematics for col_name in kinematic.value]
@@ -102,6 +108,9 @@ class UpperBodyClassifier:
 
     @staticmethod
     def y_label_column(df, event, events_dict=None, fs=100):
+        """
+        Generate binary labels for event detection based on event type and timing.
+        """
         # Initialize all zeros
         labels = pd.Series(0, index=df.index, name='y')
         
@@ -144,6 +153,9 @@ class UpperBodyClassifier:
     
     @staticmethod
     def sliding_window(df, event, events_dict=None, fs=100, stride=1):
+        """
+        Create sliding windows from time series data for feature extraction.
+        """
         windows = []
         # Get base event name
         base_event = event
@@ -178,6 +190,9 @@ class UpperBodyClassifier:
     
     @staticmethod
     def feature_extraction(data, y, event, n_jobs, events_dict=None):
+        """
+        Extract time series features from windowed data using tsfresh.
+        """
         # Merge y labels into the data
         df = data.copy()
         df['y'] = y
@@ -230,6 +245,9 @@ class UpperBodyClassifier:
     
     @staticmethod
     def extract_and_save_features(event, root_dir, datatype, out_root, n_jobs_features, events_dict):
+        """
+        Extract and save features for all trials of a specific event and data type.
+        """
         # Choose data type
         if datatype == "IMU":
             data_iter = UpperBodyClassifier.upper_body_imu_for_event(event, os.path.join(root_dir, datatype))
@@ -262,12 +280,14 @@ class UpperBodyClassifier:
             print(f"Saved: {X_path}   ({X_feat.shape[0]} windows, {X_feat.shape[1]} features)")
 
     @staticmethod
-    def load_features_for_participants(out_root, datatype, event, participants):
+    def load_features_for_participants(out_root, datatype, event, participants, return_groups=False):
+        """
+        Load and combine features from multiple participants for a specific event.
+        """
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
-        X_list, y_list = [], []
+        X_list, y_list, groups_list = [], [], []
         all_cols_set = set()
         
-        # First pass: collect all DataFrames and determine all columns
         for pid in participants:
             pid_path = os.path.join(base, pid)
             if not os.path.isdir(pid_path):
@@ -278,7 +298,7 @@ class UpperBodyClassifier:
                     continue
                 for fname in os.listdir(sensor_path):
                     if fname.endswith("_X.csv"):
-                        stem = fname[:-6]  # Remove _X.csv
+                        stem = fname[:-6]
                         Xp = os.path.join(sensor_path, f"{stem}_X.csv")
                         Yp = os.path.join(sensor_path, f"{stem}_y.csv")
                         if not os.path.exists(Yp):
@@ -292,47 +312,46 @@ class UpperBodyClassifier:
                         X_df = X_df.loc[common_idx]
                         y_sr = y_sr.loc[common_idx]
                         
-                        # Convert numeric columns to float32 immediately
+                        # Convert to float32
                         numeric_cols = X_df.select_dtypes(include=[np.number]).columns
                         X_df[numeric_cols] = X_df[numeric_cols].astype(np.float32)
                         
                         all_cols_set.update(X_df.columns)
                         X_list.append(X_df)
                         y_list.append(y_sr)
-        
+                        
+                        # Create group labels for this participant's samples
+                        if return_groups:
+                            groups_list.extend([pid] * len(X_df))
+    
         if not X_list:
             raise RuntimeError("No CSV features found for given participants.")
         
         all_cols = sorted(all_cols_set)
-        
-        # Reindex all DataFrames to have consistent columns
         X_list_reindexed = [df.reindex(columns=all_cols, fill_value=np.float32(0.0)) for df in X_list]
         
-        # Ensure all data is float32 before concatenation
         for i, df in enumerate(X_list_reindexed):
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             df[numeric_cols] = df[numeric_cols].astype(np.float32)
             X_list_reindexed[i] = df
         
-        # Concatenate all DataFrames at once
         X_all = pd.concat(X_list_reindexed, axis=0)
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
         
         print(f"Loaded features shape: {X_all.shape}")
         
-        return X_all, y_all
-    
-    @staticmethod
-    def split_participants(base_dir, train_size=0.8, random_state=42):
-        # Split participant folders in base_dir into train/test sets
-        pids = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-        if len(pids) < 2:
-            raise ValueError("Need at least 2 participants for splitting.")
-        train_pids, test_pids = train_test_split(sorted(pids), train_size=train_size, random_state=random_state)
-        return train_pids, test_pids
+        if return_groups:
+            groups = np.array(groups_list)
+            print(f"Groups shape: {groups.shape}, Unique participants: {len(np.unique(groups))}")
+            return X_all, y_all, groups
+        else:
+            return X_all, y_all
 
     @staticmethod
     def feature_selection(X_train, y_train, n_jobs=1):
+        """
+        Perform feature selection using tsfresh statistical tests and Random Forest importance.
+        """
         # Select statistically significant features using tsfresh's FeatureSelector transformer
         selector = FeatureSelector(n_jobs=n_jobs)  # Add n_jobs parameter
         X_train_sel = selector.fit_transform(X_train, y_train)
@@ -342,254 +361,398 @@ class UpperBodyClassifier:
         # Get feature importances
         importances = pd.Series(rf.feature_importances_, X_train_sel.columns)
         return selector, X_train_sel, importances
-    
-    @staticmethod
-    def export_model(clf, results_path, event, datatype):
-        model_path = os.path.join(results_path, f"{datatype}_{event}_rf_classifier.pkl")
-        dump(clf, model_path)
 
     @staticmethod
-    def select_and_export_top_features(out_root, datatype, event, results_dir, selector_n_jobs=1, train_pids=None, test_pids=None):
-        # Load saved CSV features, do train-only selection, export top-100
+    def leave_one_participant_out_feature_selection(out_root, datatype, event, results_dir, selector_n_jobs=1):
+        """
+        Perform leave-one-participant-out feature selection.
+        Returns combined top features from all LOPO iterations with importance scores.
+        """
         os.makedirs(results_dir, exist_ok=True)
-
-        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
-        if train_pids is None or test_pids is None:
-            train_pids, test_pids = UpperBodyClassifier.split_participants(base, train_size=0.8, random_state=42)
         
-        with open(os.path.join(results_dir, "train_pids.json"), "w", encoding="utf-8") as f:
-            json.dump(sorted(list(train_pids)), f, indent=2)
-
-        with open(os.path.join(results_dir, "test_pids.json"), "w", encoding="utf-8") as f:
-            json.dump(sorted(list(test_pids)), f, indent=2)
-
-        # Load features only for train participants
-        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
-
-        # Feature selection with parallel processing
-        selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train, n_jobs=selector_n_jobs)
-
-        # Filter out duplicate feature types, keeping only the highest importance
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+        
+        all_feature_sets = []
+        all_importance_dicts = []  # Store importance scores from each iteration
+        
         def get_feature_base_name(feature_name):
             import re
             parts = feature_name.split('__')
             cleaned = []
             for p in parts:
                 if '_' in p:
-                    key, val = p.rsplit('_', 1)  # paramName_value
+                    key, val = p.rsplit('_', 1)
                     if re.fullmatch(r'-?\d+(?:\.\d+)?', val):
-                        p = key  # drop numeric value, keep param name (e.g., 'chunk_len')
+                        p = key
                 cleaned.append(p)
             return '__'.join(cleaned)
-
         
-        # Group features by their base name and keep only the one with highest importance
-        feature_groups = {}
-        for feature_name, importance in importances.items():
-            base_name = get_feature_base_name(feature_name)
-            if base_name not in feature_groups or importance > feature_groups[base_name][1]:
-                feature_groups[base_name] = (feature_name, importance)  # Keep original full name
+        print(f"Running LOPO feature selection for {len(all_pids)} participants...")
         
-        # Create filtered importances series with only the best feature from each group
-        # This preserves the original complete feature names
-        filtered_importances = pd.Series(
-            {original_name: importance for original_name, importance in feature_groups.values()},
-            name=importances.name
-        )
+        for i, held_out_pid in enumerate(all_pids):
+            print(f"LOPO iteration {i+1}/{len(all_pids)}: Holding out {held_out_pid}")
+            
+            # Training participants (all except held-out)
+            train_pids = [pid for pid in all_pids if pid != held_out_pid]
+            
+            # Load features for training participants
+            X_train, y_train = UpperBodyClassifier.load_features_for_participants(
+                out_root, datatype, event, train_pids
+            )
+            
+            # Feature selection
+            selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(
+                X_train, y_train, n_jobs=selector_n_jobs
+            )
+            
+            # Filter duplicates and get top 100
+            feature_groups = {}
+            for feature_name, importance in importances.items():
+                base_name = get_feature_base_name(feature_name)
+                if base_name not in feature_groups or importance > feature_groups[base_name][1]:
+                    feature_groups[base_name] = (feature_name, importance)
+            
+            filtered_importances = pd.Series(
+                {original_name: importance for original_name, importance in feature_groups.values()},
+                name=importances.name
+            )
+            
+            top100_filtered = filtered_importances.sort_values(ascending=False).head(100)
+            all_feature_sets.append(set(top100_filtered.index))
+            all_importance_dicts.append(top100_filtered.to_dict())
         
-        # Sort by importance and take top 100
-        top100_filtered = filtered_importances.sort_values(ascending=False).head(100)
-
-        # Export filtered top features with importances to JSON
-        final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
+        # Calculate aggregate importance scores for each feature
+        def calculate_combined_importance(feature_name, importance_dicts):
+            """Calculate highest importance score for a feature across LOPO iterations"""
+            scores = [d.get(feature_name, 0) for d in importance_dicts]
+            non_zero_scores = [s for s in scores if s > 0]
+            return max(non_zero_scores) if non_zero_scores else 0
+        
+        # Get all unique features
+        all_features = set()
+        for feature_set in all_feature_sets:
+            all_features.update(feature_set)
+        
+        # Create different combined sets with their importance scores
+        combined_features_union = set.union(*all_feature_sets)
+        combined_features_intersection = set.intersection(*all_feature_sets)
+        
+        # Majority vote (features that appear in >50% of iterations)
+        feature_counts = {}
+        for feature_set in all_feature_sets:
+            for feature in feature_set:
+                feature_counts[feature] = feature_counts.get(feature, 0) + 1
+        
+        majority_threshold = len(all_pids) // 2 + 1
+        combined_features_majority = {f for f, count in feature_counts.items() 
+                                    if count >= majority_threshold}
+        
+        # Create importance dictionaries for each combined set
+        def create_importance_dict(feature_set):
+            return {feature: calculate_combined_importance(feature, all_importance_dicts) 
+                    for feature in feature_set}
+        
+        union_importances = create_importance_dict(combined_features_union)
+        intersection_importances = create_importance_dict(combined_features_intersection)
+        majority_importances = create_importance_dict(combined_features_majority)
         
         # Modified function from ptb to order features by importance not alphabetical
         def export_features_json(ef: dict, filepath):
             with open(filepath, 'w') as outfile:
                 json.dump(ef, outfile, indent=4)
-
-        export_features_json(top100_filtered.to_dict(), final_feat_path)
-        print(f"Found Top 100 {datatype} features by importance (filtered for duplicates).")
-
-        return train_pids, test_pids
-    
-    @staticmethod
-    def train_and_test_classifier(out_root, datatype, event, results_dir, train_pids=None, test_pids=None):
-        os.makedirs(results_dir, exist_ok=True)
         
-        # If split not provided, try load it; if not present, run selection now
-        train_path = os.path.join(results_dir, "train_pids.json")
-        test_path = os.path.join(results_dir, "test_pids.json")
-        if train_pids is None or test_pids is None:
-            if os.path.exists(train_path) and os.path.exists(test_path):
-                with open(train_path, "r", encoding="utf-8") as f:
-                    train_pids = set(json.load(f))
-                with open(test_path, "r", encoding="utf-8") as f:
-                    test_pids = set(json.load(f))
-            else:
-                train_pids, test_pids = UpperBodyClassifier.select_and_export_top_features(out_root, datatype, event, results_dir)
-        # Load top-100 importances
-        top100_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
-        if not os.path.exists(top100_path):
-            train_pids, test_pids = UpperBodyClassifier.select_and_export_top_features(out_root, datatype, event, results_dir, train_pids, test_pids)
-        with open(top100_path, "r", encoding="utf-8") as f:
-            feat_imp = json.load(f)
-        top_names = sorted(feat_imp.keys(), key=lambda x: feat_imp[x], reverse=True)
-        # Load train/test features
-        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
-        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
-        # Restrict to top 100 columns
-        X_train = X_train.reindex(columns=top_names, fill_value=0)
-        X_test = X_test.reindex(columns=top_names, fill_value=0)
-
-        # Train and evaluate
-        # Fit Random Forest Classifier
-        clf = RandomForestClassifier()
-        clf.fit(X_train, y_train)
-        # Evaluate the classification model
-        y_pred = clf.predict(X_test)
-        y_proba = clf.predict_proba(X_test)[:, 1]  # Get probabilities for ROC AUC
-        # Calculate metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        report = classification_report(y_test, y_pred)
-        cm = confusion_matrix(y_test, y_pred)
-        auc_score = roc_auc_score(y_test, y_proba)
-        # Save metrics to file
-        os.makedirs(results_dir, exist_ok=True)
-        # Save accuracy and AUC scores
-        metrics_path = os.path.join(results_dir, "classifier_metrics.txt")
-        with open(metrics_path, "w") as f:
-            f.write(f"Accuracy: {accuracy:.4f}\n")
-            f.write(f"AUC: {auc_score:.4f}\n")
-            f.write("\n")
-        # Save classification report separately
-        report_path = os.path.join(results_dir, "classifier_report.txt")
-        with open(report_path, "w") as f:
-            f.write(report)
-        # Visualise and save confusion matrix
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title('Confusion Matrix')
-        plt.xlabel('Predicted')
-        plt.ylabel('Actual')
-        cm_path = os.path.join(results_dir, "confusion_matrix.png")
-        plt.savefig(cm_path)
-        plt.close()
-
-        # Export model
-        UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
-
-        return clf, (train_pids, test_pids)
+        # Export each combined set (same format as original)
+        union_path = os.path.join(results_dir, f"{datatype}_{event}_union_top100_features.json")
+        export_features_json(union_importances, union_path)
+        
+        intersection_path = os.path.join(results_dir, f"{datatype}_{event}_intersection_top100_features.json")
+        export_features_json(intersection_importances, intersection_path)
+        
+        majority_path = os.path.join(results_dir, f"{datatype}_{event}_majority_top100_features.json")
+        export_features_json(majority_importances, majority_path)
+        
+        print(f"LOPO Feature Selection Results:")
+        print(f"  Union: {len(union_importances)} features -> {union_path}")
+        print(f"  Intersection: {len(intersection_importances)} features -> {intersection_path}")
+        print(f"  Majority vote: {len(majority_importances)} features -> {majority_path}")
+        
+        # Return majority vote features as default (most stable)
+        return list(majority_importances.keys()), majority_importances
 
     @staticmethod
-    def select_train_and_test_classifier(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, train_pids=None, test_pids=None):
-        
-        os.makedirs(results_dir, exist_ok=True)
-
+    def k_fold_cross_validation(out_root, datatype, event, results_dir, combined_features, k=5, rf_n_jobs=1, random_state=42):
+        """
+        Perform participant-based k-fold cross-validation using the combined feature set.
+        Includes comprehensive metrics and plots.
+        """
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
-        if train_pids is None or test_pids is None:
-            train_pids, test_pids = UpperBodyClassifier.split_participants(base, train_size=0.8, random_state=42)
+        all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
         
-        # Save participant splits
-        with open(os.path.join(results_dir, "train_pids.json"), "w", encoding="utf-8") as f:
-            json.dump(sorted(list(train_pids)), f, indent=2)
-        with open(os.path.join(results_dir, "test_pids.json"), "w", encoding="utf-8") as f:
-            json.dump(sorted(list(test_pids)), f, indent=2)
-
-        # Load features for both train and test sets
-        X_train, y_train = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, train_pids)
-        X_test, y_test = UpperBodyClassifier.load_features_for_participants(out_root, datatype, event, test_pids)
-
-        # Feature selection on training data only
-        selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(X_train, y_train, n_jobs=selector_n_jobs)
-
-        # Filter out duplicate feature types, keeping only the highest importance
-        def get_feature_base_name(feature_name):
-            import re
-            parts = feature_name.split('__')
-            cleaned = []
-            for p in parts:
-                if '_' in p:
-                    key, val = p.rsplit('_', 1)  # paramName_value
-                    if re.fullmatch(r'-?\d+(?:\.\d+)?', val):
-                        p = key  # drop numeric value, keep param name (e.g., 'chunk_len')
-                cleaned.append(p)
-            return '__'.join(cleaned)
-
-        # Group features by their base name and keep only the one with highest importance
-        feature_groups = {}
-        for feature_name, importance in importances.items():
-            base_name = get_feature_base_name(feature_name)
-            if base_name not in feature_groups or importance > feature_groups[base_name][1]:
-                feature_groups[base_name] = (feature_name, importance)  # Keep original full name
+        if len(all_pids) < k:
+            raise ValueError(f"Need at least {k} participants for {k}-fold CV. Found: {len(all_pids)}")
         
-        # Create filtered importances series with only the best feature from each group
-        filtered_importances = pd.Series(
-            {original_name: importance for original_name, importance in feature_groups.values()},
-            name=importances.name
+        # Load all features WITH group labels
+        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
+            out_root, datatype, event, all_pids, return_groups=True
         )
         
-        # Sort by importance and take top 100
-        top100_filtered = filtered_importances.sort_values(ascending=False).head(100)
-
-        # Export filtered top features with importances to JSON
-        final_feat_path = os.path.join(results_dir, f"{datatype}_{event}_top100_features.json")
+        # Restrict to combined features
+        X_all = X_all.reindex(columns=combined_features, fill_value=0)
         
-        def export_features_json(ef: dict, filepath):
-            with open(filepath, 'w') as outfile:
-                json.dump(ef, outfile, indent=4)
-
-        export_features_json(top100_filtered.to_dict(), final_feat_path)
-        print(f"Found Top 100 {datatype} features by importance (filtered for duplicates).")
-
-        # Get top feature names in order of importance
-        top_names = list(top100_filtered.index)
+        # Participant-based K-fold cross-validation
+        gkf = GroupKFold(n_splits=k)
         
-        # Restrict both train and test to top 100 columns
-        X_train_top = X_train.reindex(columns=top_names, fill_value=0)
-        X_test_top = X_test.reindex(columns=top_names, fill_value=0)
-
-        # Train and evaluate classifier
-        clf = RandomForestClassifier(n_jobs=rf_n_jobs)
-        clf.fit(X_train_top, y_train)
+        # Storage for comprehensive results
+        all_y_true = []
+        all_y_pred = []
+        all_y_proba = []
+        fold_metrics = {}
+        fold_confusion_matrices = []
+        fold_feature_importances = []
+        roc_curves_data = []
         
-        # Evaluate the classification model
-        y_pred = clf.predict(X_test_top)
-        y_proba = clf.predict_proba(X_test_top)[:, 1]  # Get probabilities for ROC AUC
+        print(f"Running participant-based {k}-fold cross-validation for {datatype} - {event}")
+        print(f"Total samples: {len(X_all)}, Total participants: {len(np.unique(groups))}")
         
-        # Calculate metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        report = classification_report(y_test, y_pred)
-        cm = confusion_matrix(y_test, y_pred)
-        auc_score = roc_auc_score(y_test, y_proba)
+        for fold, (train_idx, test_idx) in enumerate(gkf.split(X_all, y_all, groups)):
+            print(f"Processing fold {fold + 1}/{k}")
+            
+            X_train_fold = X_all.iloc[train_idx]
+            X_test_fold = X_all.iloc[test_idx]
+            y_train_fold = y_all.iloc[train_idx]
+            y_test_fold = y_all.iloc[test_idx]
+            
+            # Get participant info for this fold
+            train_participants = list(np.unique(groups[train_idx]))
+            test_participants = list(np.unique(groups[test_idx]))
+            
+            print(f"  Train participants: {train_participants}")
+            print(f"  Test participants: {test_participants}")
+            
+            # Train classifier
+            clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=random_state)
+            clf.fit(X_train_fold, y_train_fold)
+            
+            # Evaluate
+            y_pred = clf.predict(X_test_fold)
+            y_proba = clf.predict_proba(X_test_fold)[:, 1]
+            
+            # Store for aggregate analysis
+            all_y_true.extend(y_test_fold.tolist())
+            all_y_pred.extend(y_pred.tolist())
+            all_y_proba.extend(y_proba.tolist())
+            
+            # Calculate fold metrics
+            accuracy = accuracy_score(y_test_fold, y_pred)
+            auc_score = roc_auc_score(y_test_fold, y_proba) if len(np.unique(y_test_fold)) > 1 else 0.0
+            precision, recall, f1, _ = precision_recall_fscore_support(y_test_fold, y_pred, average='weighted')
+            
+            # Confusion matrix
+            cm = confusion_matrix(y_test_fold, y_pred)
+            fold_confusion_matrices.append(cm)
+            
+            # Feature importance
+            fold_feature_importances.append(clf.feature_importances_)
+            
+            # ROC curve data (only if we have both classes)
+            if len(np.unique(y_test_fold)) > 1:
+                fpr, tpr, _ = roc_curve(y_test_fold, y_proba)
+                roc_curves_data.append({'fpr': fpr, 'tpr': tpr, 'auc': auc_score})
+            
+            fold_metrics[f'fold_{fold + 1}'] = {
+                'accuracy': accuracy,
+                'auc': auc_score,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1,
+                'train_size': len(X_train_fold),
+                'test_size': len(X_test_fold),
+                'train_participants': train_participants,
+                'test_participants': test_participants,
+                'confusion_matrix': cm.tolist()
+            }
+            
+            print(f"  Fold {fold + 1}: Acc={accuracy:.4f}, AUC={auc_score:.4f}, F1={f1:.4f}")
+            print(f"  Train size: {len(X_train_fold)}, Test size: {len(X_test_fold)}")
+    
+        # Aggregate metrics across all folds
+        overall_accuracy = accuracy_score(all_y_true, all_y_pred)
+        overall_auc = roc_auc_score(all_y_true, all_y_proba)
+        overall_precision, overall_recall, overall_f1, _ = precision_recall_fscore_support(
+            all_y_true, all_y_pred, average='weighted'
+        )
+        overall_cm = confusion_matrix(all_y_true, all_y_pred)
         
-        # Save metrics to file
-        metrics_path = os.path.join(results_dir, "classifier_metrics.txt")
-        with open(metrics_path, "w") as f:
-            f.write(f"Accuracy: {accuracy:.4f}\n")
-            f.write(f"AUC: {auc_score:.4f}\n")
-            f.write("\n")
+        # Calculate summary statistics
+        fold_accuracies = [fold_metrics[f'fold_{i+1}']['accuracy'] for i in range(k)]
+        fold_aucs = [fold_metrics[f'fold_{i+1}']['auc'] for i in range(k)]
+        fold_f1s = [fold_metrics[f'fold_{i+1}']['f1_score'] for i in range(k)]
         
-        # Save classification report separately
-        report_path = os.path.join(results_dir, "classifier_report.txt")
-        with open(report_path, "w") as f:
-            f.write(report)
+        summary_stats = {
+            'overall_metrics': {
+                'accuracy': overall_accuracy,
+                'auc': overall_auc,
+                'precision': overall_precision,
+                'recall': overall_recall,
+                'f1_score': overall_f1
+            },
+            'cross_validation_stats': {
+                'mean_accuracy': np.mean(fold_accuracies),
+                'std_accuracy': np.std(fold_accuracies),
+                'mean_auc': np.mean(fold_aucs),
+                'std_auc': np.std(fold_aucs),
+                'mean_f1': np.mean(fold_f1s),
+                'std_f1': np.std(fold_f1s)
+            },
+            'individual_folds': fold_metrics
+        }
         
-        # Visualise and save confusion matrix
+        # Generate comprehensive plots
+        plots_dir = os.path.join(results_dir, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        # 1. Confusion Matrix Heatmap
         plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title('Confusion Matrix')
+        sns.heatmap(overall_cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=['Negative', 'Positive'], yticklabels=['Negative', 'Positive'])
+        plt.title(f'Overall Confusion Matrix - {datatype} {event}')
+        plt.ylabel('True')
         plt.xlabel('Predicted')
-        plt.ylabel('Actual')
-        cm_path = os.path.join(results_dir, "confusion_matrix.png")
-        plt.savefig(cm_path)
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_confusion_matrix.png"), dpi=300, bbox_inches='tight')
         plt.close()
+        
+        # 2. ROC Curves for all folds
+        plt.figure(figsize=(10, 8))
+        for i, roc_data in enumerate(roc_curves_data):
+            plt.plot(roc_data['fpr'], roc_data['tpr'], alpha=0.7, 
+                    label=f'Fold {i+1} (AUC = {roc_data["auc"]:.3f})')
+        
+        # Overall ROC curve
+        overall_fpr, overall_tpr, _ = roc_curve(all_y_true, all_y_proba)
+        overall_roc_auc = auc(overall_fpr, overall_tpr)
+        plt.plot(overall_fpr, overall_tpr, 'k-', linewidth=3,
+                label=f'Overall (AUC = {overall_roc_auc:.3f})')
+        
+        plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title(f'ROC Curves - {datatype} {event}')
+        plt.legend(loc="lower right")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_roc_curves.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 3. Feature Importance (averaged across folds)
+        avg_importances = np.mean(fold_feature_importances, axis=0)
+        feature_importance_df = pd.DataFrame({
+            'feature': combined_features,
+            'importance': avg_importances
+        }).sort_values('importance', ascending=False)
+        
+        plt.figure(figsize=(12, 8))
+        top_20_features = feature_importance_df.head(20)
+        sns.barplot(data=top_20_features, x='importance', y='feature')
+        plt.title(f'Top 20 Feature Importances - {datatype} {event}')
+        plt.xlabel('Average Importance')
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_importance.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 4. Cross-Validation Metrics Box Plot
+        cv_metrics_df = pd.DataFrame({
+            'Accuracy': fold_accuracies,
+            'AUC': fold_aucs,
+            'F1-Score': fold_f1s
+        })
+        
+        plt.figure(figsize=(10, 6))
+        cv_metrics_df.boxplot()
+        plt.title(f'Cross-Validation Metrics Distribution - {datatype} {event}')
+        plt.ylabel('Score')
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_cv_metrics_boxplot.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Save comprehensive results
+        cv_path = os.path.join(results_dir, f"{datatype}_{event}_comprehensive_cv_results.json")
+        with open(cv_path, "w", encoding="utf-8") as f:
+            json.dump(summary_stats, f, indent=2)
+        
+        # Save feature importances
+        feature_importance_df.to_csv(
+            os.path.join(results_dir, f"{datatype}_{event}_feature_importances.csv"),
+            index=False
+        )
+        
+        # Save classification report
+        report_path = os.path.join(results_dir, f"{datatype}_{event}_classification_report.txt")
+        with open(report_path, "w") as f:
+            f.write(f"Classification Report - {datatype} {event}\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Overall Performance (aggregated across all folds):\n")
+            f.write(f"Accuracy: {overall_accuracy:.4f}\n")
+            f.write(f"AUC: {overall_auc:.4f}\n")
+            f.write(f"Precision: {overall_precision:.4f}\n")
+            f.write(f"Recall: {overall_recall:.4f}\n")
+            f.write(f"F1-Score: {overall_f1:.4f}\n\n")
+            
+            f.write(f"Cross-Validation Statistics:\n")
+            f.write(f"Accuracy: {summary_stats['cross_validation_stats']['mean_accuracy']:.4f} ± {summary_stats['cross_validation_stats']['std_accuracy']:.4f}\n")
+            f.write(f"AUC: {summary_stats['cross_validation_stats']['mean_auc']:.4f} ± {summary_stats['cross_validation_stats']['std_auc']:.4f}\n")
+            f.write(f"F1-Score: {summary_stats['cross_validation_stats']['mean_f1']:.4f} ± {summary_stats['cross_validation_stats']['std_f1']:.4f}\n\n")
+            
+            f.write(f"Detailed Classification Report:\n")
+            f.write(classification_report(all_y_true, all_y_pred))
+        
+        print(f"\nComprehensive K-Fold CV Results:")
+        print(f"Overall Accuracy: {overall_accuracy:.4f}")
+        print(f"Overall AUC: {overall_auc:.4f}")
+        print(f"Overall F1-Score: {overall_f1:.4f}")
+        print(f"CV Accuracy: {summary_stats['cross_validation_stats']['mean_accuracy']:.4f} ± {summary_stats['cross_validation_stats']['std_accuracy']:.4f}")
+        print(f"CV AUC: {summary_stats['cross_validation_stats']['mean_auc']:.4f} ± {summary_stats['cross_validation_stats']['std_auc']:.4f}")
+        print(f"Plots saved to: {plots_dir}")
+        
+        return summary_stats
 
-        # Export model
-        UpperBodyClassifier.export_model(clf, results_dir, event, datatype)
-
-        return clf, (train_pids, test_pids)
-
+    @staticmethod
+    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5):
+        """
+        Complete pipeline: LOPO feature selection + K-fold CV evaluation.
+        """
+        os.makedirs(results_dir, exist_ok=True)
+        
+        print(f"Starting LOPO feature selection and CV for {datatype} - {event}")
+        
+        # Step 1: LOPO feature selection
+        combined_features, feature_results = UpperBodyClassifier.leave_one_participant_out_feature_selection(
+            out_root, datatype, event, results_dir, selector_n_jobs
+        )
+        
+        if len(combined_features) == 0:
+            print("No features survived majority vote. Trying union instead...")
+            # Load union features from JSON file
+            union_path = os.path.join(results_dir, f"{datatype}_{event}_union_top100_features.json")
+            if os.path.exists(union_path):
+                with open(union_path, "r") as f:
+                    union_features = json.load(f)
+                combined_features = list(union_features.keys())
+            else:
+                raise ValueError("No features available for cross-validation")
+        
+        # Step 2: K-fold cross-validation
+        cv_results = UpperBodyClassifier.k_fold_cross_validation(
+            out_root, datatype, event, results_dir, combined_features, k_folds, rf_n_jobs
+        )
+        
+        return combined_features, cv_results
+    
 
 class UpperBodyKinematics(Enum):
     pelvis = ["pelvis_tilt", "pelvis_list", "pelvis_rotation", "pelvis_tx", "pelvis_ty", "pelvis_tz"]
@@ -669,13 +832,14 @@ if __name__ == "__main__":
             for datatype in datatypes:
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} BEGIN")
                 Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.select_train_and_test_classifier)(
+                    delayed(UpperBodyClassifier.lopo_feature_selection_and_cv)(
                         out_root, 
                         datatype, 
                         ev, 
                         os.path.join(models_root, datatype, ev.replace(" ", "_")),
                         selector_n_jobs,
-                        rf_n_jobs
+                        rf_n_jobs,
+                        5  # k_folds
                     ) for ev in events
                 )
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
