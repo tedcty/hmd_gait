@@ -10,6 +10,9 @@ class Requirements:
               "Cuda sdk from the nvidia website will cause a conflict that will prevent numba from running.\n")
         print("{0}\n\tInstalling tsfresh ...\n{0}".format(Requirements.line))
         os.system("conda install -y conda-forge::tsfresh")
+        os.system('conda install -y PySide6 vtk')
+        print("\n\tInstalling Mayavi")
+        os.system('conda install -y mayavi')
 
         print("{0}\n\tInstalling Opensim ...\n{0}".format(Requirements.line))
         os.system('conda install -y -c opensim-org opensim')
@@ -17,6 +20,21 @@ class Requirements:
 
         os.system('python -m pip install build toml')
         print("{0}\n\tInstalling ABI-MMG's PTB package...\n{0}".format(Requirements.line))
+        print("\n\tInstalling Gias3...\n")
+        gias = {
+            "pydicom:": 'python -m pip install pydicom==2.4.4',
+            "gias3": 'python -m pip install gias3',
+            "gias3.musculoskeletal": 'python -m pip install gias3.musculoskeletal',
+            "gias3.io": 'python -m pip install gias3.io',
+            # following commented packages have errors and are not used.
+            # "gias3.mapclientpluginutilities": 'python -m pip install gias3.mapclientpluginutilities',
+            "gias3.visualisation": 'python -m pip install gias3.visualisation',
+            "gias3.applications": 'python -m pip install gias3.applications',
+            "gias3.examples": 'python -m pip install gias3.examples'
+        }
+        for g in gias:
+            os.system(gias[g])
+
         wget_spec = importlib.util.find_spec("wget")
         found = wget_spec is not None
         if not os.path.exists('./resources/wheels/ptb/'):

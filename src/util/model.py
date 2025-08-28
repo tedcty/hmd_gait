@@ -11,6 +11,8 @@ from ptb.ml.ml_util import MLOperations, MLKeys
 
 from sklearn.ensemble import RandomForestClassifier
 
+from gias3.learning.PCA import PCA
+
 
 """
 This package contains code adapted from MLOperations for classifiers.
@@ -129,4 +131,19 @@ class FeatureSet:
             fc_selected = selector.fit_transform(efx, y)
             ret[m] = fc_selected
         return ret
+
+
+class ModelOfNormality:
+    def __init__(self):
+        self.feature_set = {}
+        self.pc_model = None
+        pass
+
+    def train(self, X):
+        pass
+
+    def fit(self, X):
+        x = self.pc_model.fit(X)
+        return x
+
 

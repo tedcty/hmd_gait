@@ -1,10 +1,10 @@
 import numpy as np
 import pandas as pd
+
 from ptb.core import Yatsdo
 from util import model, io
 from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
-
 
 def preprocess():
     rootx = "M:/Mocap/Movella_Re/P025/Straight Normal 01/"
