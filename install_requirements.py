@@ -13,6 +13,7 @@ class Requirements:
 
         print("{0}\n\tInstalling Opensim ...\n{0}".format(Requirements.line))
         os.system('conda install -y -c opensim-org opensim')
+        os.system("conda install -y pytables")
 
         os.system('python -m pip install build toml')
         print("{0}\n\tInstalling ABI-MMG's PTB package...\n{0}".format(Requirements.line))
