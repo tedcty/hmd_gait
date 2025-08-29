@@ -66,6 +66,8 @@ if __name__ == '__main__':
     # total_size_mb = np.sum(total_file_size_mb)
     # total_size_gb = np.sum(total_file_size_gb)
     for p in kid:
+        if int(p[1:]) < 10:
+            continue
         for k in kid[p]:
             b = [o for o in os.listdir("{0}{1}/{2}".format(root, p, k)) if o.endswith('_vec3_2.csv') if is_lower_IMU(o)]
             for l in b:
