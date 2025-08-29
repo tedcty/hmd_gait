@@ -3,13 +3,13 @@ import pandas as pd
 import numpy as np
 from enum import Enum
 import json
-from joblib import dump, Parallel, delayed
+from joblib import Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
 from ptb.ml.tags import MLKeys
 from tsfresh.transformers import FeatureSelector
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import KFold, GroupKFold
+from sklearn.model_selection import GroupKFold, LeaveOneGroupOut
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, precision_recall_fscore_support, roc_curve, auc
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -365,16 +365,28 @@ class UpperBodyClassifier:
     @staticmethod
     def leave_one_participant_out_feature_selection(out_root, datatype, event, results_dir, selector_n_jobs=1):
         """
-        Perform leave-one-participant-out feature selection.
-        Returns combined top features from all LOPO iterations with importance scores.
-        """
+        Perform leave-one-participant-out feature selection using LeaveOneGroupOut.
+        """        
         os.makedirs(results_dir, exist_ok=True)
         
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
         
+        if len(all_pids) < 3:
+            raise ValueError(f"Need at least 3 participants for LOPO feature selection. Found: {len(all_pids)}")
+        
+        print(f"Loading all data for {len(all_pids)} participants...")
+        
+        # Load ALL data at once
+        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
+            out_root, datatype, event, all_pids, return_groups=True
+        )
+        
+        print(f"Loaded {X_all.shape[0]} samples with {X_all.shape[1]} features")
+        
+        logo = LeaveOneGroupOut()
         all_feature_sets = []
-        all_importance_dicts = []  # Store importance scores from each iteration
+        all_importance_dicts = []
         
         def get_feature_base_name(feature_name):
             import re
@@ -388,18 +400,17 @@ class UpperBodyClassifier:
                 cleaned.append(p)
             return '__'.join(cleaned)
         
-        print(f"Running LOPO feature selection for {len(all_pids)} participants...")
+        print(f"Running LOPO feature selection...")
         
-        for i, held_out_pid in enumerate(all_pids):
-            print(f"LOPO iteration {i+1}/{len(all_pids)}: Holding out {held_out_pid}")
+        for i, (train_idx, test_idx) in enumerate(logo.split(X_all, y_all, groups)):
+            held_out_participants = list(np.unique(groups[test_idx]))
+            train_participants = list(np.unique(groups[train_idx]))
             
-            # Training participants (all except held-out)
-            train_pids = [pid for pid in all_pids if pid != held_out_pid]
+            print(f"LOPO iteration {i+1}/{len(all_pids)}: Holding out {held_out_participants}")
             
-            # Load features for training participants
-            X_train, y_train = UpperBodyClassifier.load_features_for_participants(
-                out_root, datatype, event, train_pids
-            )
+            # Extract training data for this fold
+            X_train = X_all.iloc[train_idx]
+            y_train = y_all.iloc[train_idx]
             
             # Feature selection
             selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(
@@ -421,6 +432,8 @@ class UpperBodyClassifier:
             top100_filtered = filtered_importances.sort_values(ascending=False).head(100)
             all_feature_sets.append(set(top100_filtered.index))
             all_importance_dicts.append(top100_filtered.to_dict())
+            
+            print(f"  Selected {len(top100_filtered)} features from {len(X_train)} training samples")
         
         # Calculate aggregate importance scores for each feature
         def calculate_combined_importance(feature_name, importance_dicts):
