@@ -1,6 +1,8 @@
 import os
 import numpy as np
 import pandas as pd
+import gzip
+import pickle
 
 import ptb
 from ptb.core import Yatsdo
@@ -35,13 +37,23 @@ def gen_windows(y: Yatsdo, size=60):
         idx += 1
     return windows
 
+def export_features(retx, file_pathx):
+    with gzip.open(file_pathx, 'wb', compresslevel=9) as fx:
+        pickle.dump(retx, fx)
+    pass
+
+def load_features(file_pathx):
+    with gzip.open(file_pathx, "rb") as fx:
+        loaded_data = pickle.load(fx)
+    return loaded_data
+
 if __name__ == '__main__':
     root = "M:/Mocap/Movella_Re/"
     pid = os.listdir(root)
     pid.sort()
     kid = {p: [q for q in os.listdir("{0}{1}".format(root, p)) if not_in_skip(q)] for p in pid}
-    total_file_size_mb = []
-    total_file_size_gb = []
+    # total_file_size_mb = []
+    # total_file_size_gb = []
     # for p in kid:
     #     for k in kid[p]:
     #         b = [o for o in os.listdir("{0}{1}/{2}".format(root, p, k)) if o.endswith('_vec3_2.csv') if is_lower_IMU(o)]
@@ -65,16 +77,20 @@ if __name__ == '__main__':
     #     pass
     # total_size_mb = np.sum(total_file_size_mb)
     # total_size_gb = np.sum(total_file_size_gb)
+    count = 0
     for p in kid:
-        if int(p[1:]) < 10:
-            continue
+        if count > 10:
+            break
         for k in kid[p]:
-            b = [o for o in os.listdir("{0}{1}/{2}".format(root, p, k)) if o.endswith('_vec3_2.csv') if is_lower_IMU(o)]
+            b = [o for o in os.listdir("{0}{1}/{2}".format(root, p, k)) if o.endswith('_vec3_2_raw.csv') if is_lower_IMU(o)]
             for l in b:
-                print()
+                print(l)
                 file_path = "{0}{1}/{2}/{3}".format(root, p, k, l)
-                p = pd.read_csv(file_path)
-                y = Yatsdo(p)
+                try:
+                    pk = pd.read_csv(file_path)
+                except pd.errors.EmptyDataError:
+                    continue
+                y = Yatsdo(pk)
                 w = gen_windows(y)
                 ws = np.vstack(w)
                 wscols = ['id']
@@ -84,7 +100,13 @@ if __name__ == '__main__':
                 #fc = MLKeys.MFCParameters
                 fc = MLKeys.CFCParameters
                 table_id_name = fc.name
-                filename = "{0}_features_{1}".format(l[:-4], table_id_name)
-                efx, param = MLOperations.extract_features_from_x(psdf, fc_parameters=fc, n_jobs=6)
-                MLOperations.export_features(efx, param, output_folder="I:/Meta/TestMLFeatures/", filename=filename, table_id=table_id_name)
+                filename = "{3}_{0}_{1}_features_{2}".format(l[:-4], k, table_id_name, p)
+                efx, param = MLOperations.extract_features_from_x(psdf, fc_parameters=fc, n_jobs=8)
+                ret = {'efx': efx, 'param': param}
+                file_path = "I:/Meta/TestMLFeatures/" + filename + ".pkl.gz"
+                export_features(ret, file_path)
+                print("Done.")
+                #MLOperations.export_features(efx, param, output_folder="I:/Meta/TestMLFeatures/", filename=filename, table_id=table_id_name)
+            print(k)
+        print(p)
     pass
