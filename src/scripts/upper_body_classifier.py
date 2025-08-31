@@ -16,6 +16,8 @@ import seaborn as sns
 import multiprocessing
 from event_constants import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES, EventWindowSize)
 from trim_events import compute_whole_event_std_global, read_event_labels
+from datetime import datetime
+import re
 
 
 class UpperBodyClassifier:
@@ -389,7 +391,6 @@ class UpperBodyClassifier:
         all_importance_dicts = []
         
         def get_feature_base_name(feature_name):
-            import re
             parts = feature_name.split('__')
             cleaned = []
             for p in parts:
@@ -556,10 +557,8 @@ class UpperBodyClassifier:
             all_y_pred.extend(y_pred.tolist())
             all_y_proba.extend(y_proba.tolist())
             
-            # Calculate fold metrics
-            accuracy = accuracy_score(y_test_fold, y_pred)
+            # Calculate fold metrics (only AUC - not in classification_report)
             auc_score = roc_auc_score(y_test_fold, y_proba) if len(np.unique(y_test_fold)) > 1 else 0.0
-            precision, recall, f1, _ = precision_recall_fscore_support(y_test_fold, y_pred, average='weighted')
             
             # Confusion matrix
             cm = confusion_matrix(y_test_fold, y_pred)
@@ -574,11 +573,7 @@ class UpperBodyClassifier:
                 roc_curves_data.append({'fpr': fpr, 'tpr': tpr, 'auc': auc_score})
             
             fold_metrics[f'fold_{fold + 1}'] = {
-                'accuracy': accuracy,
                 'auc': auc_score,
-                'precision': precision,
-                'recall': recall,
-                'f1_score': f1,
                 'train_size': len(X_train_fold),
                 'test_size': len(X_test_fold),
                 'train_participants': train_participants,
@@ -586,37 +581,26 @@ class UpperBodyClassifier:
                 'confusion_matrix': cm.tolist()
             }
             
-            print(f"  Fold {fold + 1}: Acc={accuracy:.4f}, AUC={auc_score:.4f}, F1={f1:.4f}")
+            print(f"  Fold {fold + 1}: AUC={auc_score:.4f}")
             print(f"  Train size: {len(X_train_fold)}, Test size: {len(X_test_fold)}")
-    
-        # Aggregate metrics across all folds
-        overall_accuracy = accuracy_score(all_y_true, all_y_pred)
+
+        # Calculate additional metrics not included in classification_report
         overall_auc = roc_auc_score(all_y_true, all_y_proba)
-        overall_precision, overall_recall, overall_f1, _ = precision_recall_fscore_support(
-            all_y_true, all_y_pred, average='weighted'
-        )
         overall_cm = confusion_matrix(all_y_true, all_y_pred)
         
-        # Calculate summary statistics
-        fold_accuracies = [fold_metrics[f'fold_{i+1}']['accuracy'] for i in range(k)]
+        # Calculate summary statistics for AUC (only additional metric)
         fold_aucs = [fold_metrics[f'fold_{i+1}']['auc'] for i in range(k)]
-        fold_f1s = [fold_metrics[f'fold_{i+1}']['f1_score'] for i in range(k)]
+        
+        # Get scikit-learn classification report as dict
+        sklearn_report = classification_report(all_y_true, all_y_pred, output_dict=True)
         
         summary_stats = {
-            'overall_metrics': {
-                'accuracy': overall_accuracy,
-                'auc': overall_auc,
-                'precision': overall_precision,
-                'recall': overall_recall,
-                'f1_score': overall_f1
-            },
-            'cross_validation_stats': {
-                'mean_accuracy': np.mean(fold_accuracies),
-                'std_accuracy': np.std(fold_accuracies),
-                'mean_auc': np.mean(fold_aucs),
-                'std_auc': np.std(fold_aucs),
-                'mean_f1': np.mean(fold_f1s),
-                'std_f1': np.std(fold_f1s)
+            'sklearn_classification_report': sklearn_report,
+            'additional_metrics': {
+                'overall_auc': overall_auc,
+                'cv_auc_mean': np.mean(fold_aucs),
+                'cv_auc_std': np.std(fold_aucs),
+                'overall_confusion_matrix': overall_cm.tolist()
             },
             'individual_folds': fold_metrics
         }
@@ -676,21 +660,18 @@ class UpperBodyClassifier:
         plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_importance.png"), dpi=300, bbox_inches='tight')
         plt.close()
         
-        # 4. Cross-Validation Metrics Box Plot
+        # 4. Cross-Validation AUC Box Plot
         cv_metrics_df = pd.DataFrame({
-            'Accuracy': fold_accuracies,
-            'AUC': fold_aucs,
-            'F1-Score': fold_f1s
+            'AUC': fold_aucs
         })
         
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(6, 6))
         cv_metrics_df.boxplot()
-        plt.title(f'Cross-Validation Metrics Distribution - {datatype} {event}')
-        plt.ylabel('Score')
-        plt.xticks(rotation=45)
+        plt.title(f'Cross-Validation AUC Distribution - {datatype} {event}')
+        plt.ylabel('AUC Score')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_cv_metrics_boxplot.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_cv_auc_boxplot.png"), dpi=300, bbox_inches='tight')
         plt.close()
         
         # Save comprehensive results
@@ -704,32 +685,43 @@ class UpperBodyClassifier:
             index=False
         )
         
-        # Save classification report
+        # Save scikit-learn's classification report as text
         report_path = os.path.join(results_dir, f"{datatype}_{event}_classification_report.txt")
         with open(report_path, "w") as f:
             f.write(f"Classification Report - {datatype} {event}\n")
             f.write("=" * 50 + "\n\n")
-            f.write(f"Overall Performance (aggregated across all folds):\n")
-            f.write(f"Accuracy: {overall_accuracy:.4f}\n")
-            f.write(f"AUC: {overall_auc:.4f}\n")
-            f.write(f"Precision: {overall_precision:.4f}\n")
-            f.write(f"Recall: {overall_recall:.4f}\n")
-            f.write(f"F1-Score: {overall_f1:.4f}\n\n")
-            
-            f.write(f"Cross-Validation Statistics:\n")
-            f.write(f"Accuracy: {summary_stats['cross_validation_stats']['mean_accuracy']:.4f} ± {summary_stats['cross_validation_stats']['std_accuracy']:.4f}\n")
-            f.write(f"AUC: {summary_stats['cross_validation_stats']['mean_auc']:.4f} ± {summary_stats['cross_validation_stats']['std_auc']:.4f}\n")
-            f.write(f"F1-Score: {summary_stats['cross_validation_stats']['mean_f1']:.4f} ± {summary_stats['cross_validation_stats']['std_f1']:.4f}\n\n")
-            
-            f.write(f"Detailed Classification Report:\n")
             f.write(classification_report(all_y_true, all_y_pred))
-        
+    
+        # Save additional summary metrics in a separate file
+        summary_path = os.path.join(results_dir, f"{datatype}_{event}_summary_metrics.txt")
+        with open(summary_path, "w") as f:
+            f.write(f"Summary Metrics - {datatype} {event}\n")
+            f.write("=" * 40 + "\n\n")
+            
+            f.write("AUC Metrics:\n")
+            f.write("-" * 12 + "\n")
+            f.write(f"Overall AUC: {overall_auc:.4f}\n")
+            f.write(f"Cross-Validation AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}\n\n")
+            
+            f.write("Confusion Matrix:\n")
+            f.write("-" * 16 + "\n")
+            f.write(f"True Negative: {overall_cm[0,0]}, False Positive: {overall_cm[0,1]}\n")
+            f.write(f"False Negative: {overall_cm[1,0]}, True Positive: {overall_cm[1,1]}\n\n")
+            
+            f.write("Cross-Validation Details:\n")
+            f.write("-" * 24 + "\n")
+            f.write(f"Number of folds: {k}\n")
+            f.write(f"Total samples: {len(all_y_true)}\n")
+            f.write(f"Total participants: {len(np.unique(groups))}\n")
+            f.write(f"Features used: {len(combined_features)}\n")
+    
         print(f"\nComprehensive K-Fold CV Results:")
-        print(f"Overall Accuracy: {overall_accuracy:.4f}")
+        print(f"Overall Accuracy: {sklearn_report['accuracy']:.4f}")
         print(f"Overall AUC: {overall_auc:.4f}")
-        print(f"Overall F1-Score: {overall_f1:.4f}")
-        print(f"CV Accuracy: {summary_stats['cross_validation_stats']['mean_accuracy']:.4f} ± {summary_stats['cross_validation_stats']['std_accuracy']:.4f}")
-        print(f"CV AUC: {summary_stats['cross_validation_stats']['mean_auc']:.4f} ± {summary_stats['cross_validation_stats']['std_auc']:.4f}")
+        print(f"Overall F1-Score: {sklearn_report['weighted avg']['f1-score']:.4f}")
+        print(f"CV AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
+        print(f"Classification report: {report_path}")
+        print(f"Summary metrics: {summary_path}")
         print(f"Plots saved to: {plots_dir}")
         
         return summary_stats
@@ -789,7 +781,6 @@ class UpperBodyIMU(Enum):
 
 
 if __name__ == "__main__":
-    from datetime import datetime
 
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
