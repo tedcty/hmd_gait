@@ -436,63 +436,68 @@ class UpperBodyClassifier:
             
             print(f"  Selected {len(top100_filtered)} features from {len(X_train)} training samples")
         
-        # Calculate aggregate importance scores for each feature
-        def calculate_combined_importance(feature_name, importance_dicts):
-            """Calculate highest importance score for a feature across LOPO iterations"""
-            scores = [d.get(feature_name, 0) for d in importance_dicts]
-            non_zero_scores = [s for s in scores if s > 0]
-            return max(non_zero_scores) if non_zero_scores else 0
-        
-        # Get all unique features
-        all_features = set()
-        for feature_set in all_feature_sets:
-            all_features.update(feature_set)
-        
-        # Create different combined sets with their importance scores
-        combined_features_union = set.union(*all_feature_sets)
-        combined_features_intersection = set.intersection(*all_feature_sets)
-        
-        # Majority vote (features that appear in >50% of iterations)
-        feature_counts = {}
+        # Calculate prevalence-based combined feature set
+        feature_prevalence = {}
         for feature_set in all_feature_sets:
             for feature in feature_set:
-                feature_counts[feature] = feature_counts.get(feature, 0) + 1
+                feature_prevalence[feature] = feature_prevalence.get(feature, 0) + 1
         
-        majority_threshold = len(all_pids) // 2 + 1
-        combined_features_majority = {f for f, count in feature_counts.items() 
-                                    if count >= majority_threshold}
+        # Sort features by prevalence (descending), then by maximum importance as tiebreaker
+        def calculate_max_importance(feature_name, importance_dicts):
+            """Calculate highest importance score for a feature across LOPO iterations"""
+            scores = [d.get(feature_name, 0) for d in importance_dicts]
+            return max(scores) if scores else 0
         
-        # Create importance dictionaries for each combined set
-        def create_importance_dict(feature_set):
-            return {feature: calculate_combined_importance(feature, all_importance_dicts) 
-                    for feature in feature_set}
+        # Create list of tuples: (feature_name, prevalence, max_importance)
+        feature_ranking = []
+        for feature, prevalence in feature_prevalence.items():
+            max_importance = calculate_max_importance(feature, all_importance_dicts)
+            feature_ranking.append((feature, prevalence, max_importance))
         
-        union_importances = create_importance_dict(combined_features_union)
-        intersection_importances = create_importance_dict(combined_features_intersection)
-        majority_importances = create_importance_dict(combined_features_majority)
+        # Sort by prevalence (descending), then by max_importance (descending)
+        feature_ranking.sort(key=lambda x: (x[1], x[2]), reverse=True)
         
-        # Modified function from ptb to order features by importance not alphabetical
+        # Take top 100 most prevalent features
+        top_100_prevalent = feature_ranking[:100]
+        prevalence_features = [feature for feature, _, _ in top_100_prevalent]
+        
+        # Create importance dictionary for the prevalence-based features
+        prevalence_importances = {
+            feature: calculate_max_importance(feature, all_importance_dicts) 
+            for feature in prevalence_features
+        }
+        
+        # Export the prevalence-based feature set
         def export_features_json(ef: dict, filepath):
             with open(filepath, 'w') as outfile:
                 json.dump(ef, outfile, indent=4)
         
-        # Export each combined set (same format as original)
-        union_path = os.path.join(results_dir, f"{datatype}_{event}_union_top100_features.json")
-        export_features_json(union_importances, union_path)
+        prevalence_path = os.path.join(results_dir, f"{datatype}_{event}_prevalence_top100_features.json")
+        export_features_json(prevalence_importances, prevalence_path)
         
-        intersection_path = os.path.join(results_dir, f"{datatype}_{event}_intersection_top100_features.json")
-        export_features_json(intersection_importances, intersection_path)
+        # Also save detailed prevalence information for analysis
+        prevalence_analysis = []
+        for feature, prevalence, max_importance in top_100_prevalent:
+            prevalence_analysis.append({
+                'feature': feature,
+                'prevalence': prevalence,
+                'prevalence_percentage': (prevalence / len(all_pids)) * 100,
+                'max_importance': max_importance,
+                'appeared_in_iterations': f"{prevalence}/{len(all_pids)}"
+            })
         
-        majority_path = os.path.join(results_dir, f"{datatype}_{event}_majority_top100_features.json")
-        export_features_json(majority_importances, majority_path)
+        prevalence_df = pd.DataFrame(prevalence_analysis)
+        prevalence_analysis_path = os.path.join(results_dir, f"{datatype}_{event}_prevalence_analysis.csv")
+        prevalence_df.to_csv(prevalence_analysis_path, index=False)
         
-        print(f"LOPO Feature Selection Results:")
-        print(f"  Union: {len(union_importances)} features -> {union_path}")
-        print(f"  Intersection: {len(intersection_importances)} features -> {intersection_path}")
-        print(f"  Majority vote: {len(majority_importances)} features -> {majority_path}")
+        print(f"Prevalence-based Feature Selection Results:")
+        print(f"  Top 100 prevalent features: {len(prevalence_features)} -> {prevalence_path}")
+        print(f"  Prevalence analysis: {prevalence_analysis_path}")
+        print(f"  Features appearing in all {len(all_pids)} iterations: {sum(1 for _, p, _ in top_100_prevalent if p == len(all_pids))}")
+        print(f"  Average prevalence of top 100: {np.mean([p for _, p, _ in top_100_prevalent]):.1f}/{len(all_pids)}")
         
-        # Return majority vote features as default (most stable)
-        return list(majority_importances.keys()), majority_importances
+        # Return prevalence-based features as the combined set
+        return prevalence_features, prevalence_importances
 
     @staticmethod
     def k_fold_cross_validation(out_root, datatype, event, results_dir, combined_features, k=5, rf_n_jobs=1, random_state=42):
@@ -644,21 +649,44 @@ class UpperBodyClassifier:
         plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_roc_curves.png"), dpi=300, bbox_inches='tight')
         plt.close()
         
-        # 3. Feature Importance (averaged across folds)
-        avg_importances = np.mean(fold_feature_importances, axis=0)
-        feature_importance_df = pd.DataFrame({
-            'feature': combined_features,
-            'importance': avg_importances
-        }).sort_values('importance', ascending=False)
-        
-        plt.figure(figsize=(12, 8))
-        top_20_features = feature_importance_df.head(20)
-        sns.barplot(data=top_20_features, x='importance', y='feature')
-        plt.title(f'Top 20 Feature Importances - {datatype} {event}')
-        plt.xlabel('Average Importance')
-        plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_importance.png"), dpi=300, bbox_inches='tight')
-        plt.close()
+        # 3. Feature Prevalence (top 10 by prevalence percentage)
+        # Load the prevalence analysis data
+        prevalence_analysis_path = os.path.join(results_dir, f"{datatype}_{event}_prevalence_analysis.csv")
+        if os.path.exists(prevalence_analysis_path):
+            prevalence_df = pd.read_csv(prevalence_analysis_path)
+            top_10_prevalence = prevalence_df.head(10)
+            
+            plt.figure(figsize=(12, 8))
+            sns.barplot(data=top_10_prevalence, x='prevalence_percentage', y='feature', orient='h')
+            plt.title(f'Top 10 Features by Prevalence - {datatype} {event}')
+            plt.xlabel('Prevalence Percentage (%)')
+            plt.ylabel('Feature')
+            
+            # Add prevalence count annotations to the bars
+            for i, (idx, row) in enumerate(top_10_prevalence.iterrows()):
+                plt.text(row['prevalence_percentage'] + 1, i, 
+                        f"{row['appeared_in_iterations']}", 
+                        va='center', fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_prevalence.png"), dpi=300, bbox_inches='tight')
+            plt.close()
+        else:
+            # Fallback to importance-based plot if prevalence data not available
+            avg_importances = np.mean(fold_feature_importances, axis=0)
+            feature_importance_df = pd.DataFrame({
+                'feature': combined_features,
+                'importance': avg_importances
+            }).sort_values('importance', ascending=False)
+            
+            plt.figure(figsize=(12, 8))
+            top_10_features = feature_importance_df.head(10)
+            sns.barplot(data=top_10_features, x='importance', y='feature', orient='h')
+            plt.title(f'Top 10 Feature Importances - {datatype} {event}')
+            plt.xlabel('Average Importance')
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_prevalence.png"), dpi=300, bbox_inches='tight')
+            plt.close()
         
         # 4. Cross-Validation AUC Box Plot
         cv_metrics_df = pd.DataFrame({
@@ -786,8 +814,8 @@ class UpperBodyIMU(Enum):
     # right_hand = "RightHand"
     # left_shoulder = "LeftShoulder"
     # right_shoulder = "RightShoulder"
-    left_upper_arm = "LeftUpperArm"
-    # right_upper_arm = "RightUpperArm"
+    # left_upper_arm = "LeftUpperArm"
+    right_upper_arm = "RightUpperArm"
     # pelvis = "Pelvis"
     # sternum = "T8"
 
