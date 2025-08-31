@@ -673,58 +673,70 @@ class UpperBodyClassifier:
         plt.tight_layout()
         plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_cv_auc_boxplot.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        
-        # Save comprehensive results
-        cv_path = os.path.join(results_dir, f"{datatype}_{event}_comprehensive_cv_results.json")
-        with open(cv_path, "w", encoding="utf-8") as f:
-            json.dump(summary_stats, f, indent=2)
-        
+
         # Save feature importances
         feature_importance_df.to_csv(
             os.path.join(results_dir, f"{datatype}_{event}_feature_importances.csv"),
             index=False
         )
-        
-        # Save scikit-learn's classification report as text
+
+        # Save comprehensive text report (only one file needed)
         report_path = os.path.join(results_dir, f"{datatype}_{event}_classification_report.txt")
+        
+        def fold_lines():
+            lines = []
+            for i in range(k):
+                fkey = f'fold_{i+1}'
+                f = fold_metrics[fkey]
+                tn, fp = f['confusion_matrix'][0]
+                fn, tp = f['confusion_matrix'][1]
+                lines.append(
+                    f"  Fold {i+1}:\n"
+                    f"    AUC: {f['auc']:.4f}\n"
+                    f"    Train size: {f['train_size']}   Test size: {f['test_size']}\n"
+                    f"    Train participants: {', '.join(map(str, f['train_participants']))}\n"
+                    f"    Test participants: {', '.join(map(str, f['test_participants']))}\n"
+                    f"    Confusion matrix (TN, FP, FN, TP): {tn}, {fp}, {fn}, {tp}\n\n"
+                )
+            return "".join(lines)
+
         with open(report_path, "w") as f:
             f.write(f"Classification Report - {datatype} {event}\n")
             f.write("=" * 50 + "\n\n")
             f.write(classification_report(all_y_true, all_y_pred))
-    
-        # Save additional summary metrics in a separate file
-        summary_path = os.path.join(results_dir, f"{datatype}_{event}_summary_metrics.txt")
-        with open(summary_path, "w") as f:
-            f.write(f"Summary Metrics - {datatype} {event}\n")
-            f.write("=" * 40 + "\n\n")
-            
+            f.write("\n" + "-" * 50 + "\n")
+            f.write("Summary Metrics\n")
+            f.write("-" * 50 + "\n")
             f.write("AUC Metrics:\n")
-            f.write("-" * 12 + "\n")
-            f.write(f"Overall AUC: {overall_auc:.4f}\n")
-            f.write(f"Cross-Validation AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}\n\n")
-            
-            f.write("Confusion Matrix:\n")
-            f.write("-" * 16 + "\n")
-            f.write(f"True Negative: {overall_cm[0,0]}, False Positive: {overall_cm[0,1]}\n")
-            f.write(f"False Negative: {overall_cm[1,0]}, True Positive: {overall_cm[1,1]}\n\n")
-            
+            f.write(f"  Overall AUC: {overall_auc:.4f}\n")
+            f.write(f"  Cross-Validation AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}\n\n")
+            f.write("Confusion Matrix (Overall):\n")
+            f.write(f"  True Negative: {overall_cm[0,0]}    False Positive: {overall_cm[0,1]}\n")
+            f.write(f"  False Negative: {overall_cm[1,0]}   True Positive: {overall_cm[1,1]}\n\n")
             f.write("Cross-Validation Details:\n")
-            f.write("-" * 24 + "\n")
-            f.write(f"Number of folds: {k}\n")
-            f.write(f"Total samples: {len(all_y_true)}\n")
-            f.write(f"Total participants: {len(np.unique(groups))}\n")
-            f.write(f"Features used: {len(combined_features)}\n")
-    
+            f.write(f"  Number of folds: {k}\n")
+            f.write(f"  Total samples: {len(all_y_true)}\n")
+            f.write(f"  Total participants: {len(np.unique(groups))}\n")
+            f.write(f"  Features used: {len(combined_features)}\n\n")
+            f.write("Per-Fold Breakdown:\n")
+            f.write(fold_lines())
+        
         print(f"\nComprehensive K-Fold CV Results:")
         print(f"Overall Accuracy: {sklearn_report['accuracy']:.4f}")
         print(f"Overall AUC: {overall_auc:.4f}")
         print(f"Overall F1-Score: {sklearn_report['weighted avg']['f1-score']:.4f}")
         print(f"CV AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
         print(f"Classification report: {report_path}")
-        print(f"Summary metrics: {summary_path}")
         print(f"Plots saved to: {plots_dir}")
         
-        return summary_stats
+        # Return just the important data for programmatic use
+        return {
+            'overall_auc': overall_auc,
+            'cv_auc_mean': np.mean(fold_aucs),
+            'cv_auc_std': np.std(fold_aucs),
+            'accuracy': sklearn_report['accuracy'],
+            'f1_score': sklearn_report['weighted avg']['f1-score']
+        }
 
     @staticmethod
     def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5):
