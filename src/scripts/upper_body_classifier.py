@@ -782,31 +782,151 @@ class UpperBodyClassifier:
         }
 
     @staticmethod
-    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5, top_k=100):
+    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5, top_k_values=[100, 50, 20, 10]):
         """
-        Complete pipeline: LOPO feature selection + K-fold CV evaluation.
+        Complete pipeline: LOPO feature selection + K-fold CV evaluation for multiple top_k values.
         """
         os.makedirs(results_dir, exist_ok=True)
         
-        print(f"Starting LOPO feature selection and CV for {datatype} - {event} (top {top_k})")
+        print(f"Starting LOPO feature selection and CV for {datatype} - {event} (top_k values: {top_k_values})")
         
-        # Step 1: LOPO feature selection (prevalence-based)
-        combined_features, feature_results = UpperBodyClassifier.leave_one_participant_out_feature_selection(
-            out_root, datatype, event, results_dir, selector_n_jobs, top_k
+        # Load data once for all top_k values
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+        
+        if len(all_pids) < 3:
+            raise ValueError(f"Need at least 3 participants for LOPO feature selection. Found: {len(all_pids)}")
+        
+        print(f"Loading all data for {len(all_pids)} participants...")
+        
+        # Load ALL data at once - shared across all top_k values
+        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
+            out_root, datatype, event, all_pids, return_groups=True
         )
         
-        # Prevalence-based selection always returns features, so no need for fallback
-        if len(combined_features) == 0:
-            raise ValueError("No features returned from prevalence-based selection - this should not happen")
+        print(f"Loaded {X_all.shape[0]} samples with {X_all.shape[1]} features")
         
-        # Step 2: K-fold cross-validation (pass top_k for subfolder organization)
-        results_dir_with_topk = os.path.join(results_dir, f"top_{top_k}")
-        cv_results = UpperBodyClassifier.k_fold_cross_validation(
-            out_root, datatype, event, results_dir_with_topk, combined_features, k_folds, rf_n_jobs, top_k=top_k
-        )
+        # Run LOPO once and collect all feature importance data
+        logo = LeaveOneGroupOut()
+        all_importance_dicts = []
         
-        return combined_features, cv_results
+        def get_feature_base_name(feature_name):
+            parts = feature_name.split('__')
+            cleaned = []
+            for p in parts:
+                if '_' in p:
+                    key, val = p.rsplit('_', 1)
+                    if re.fullmatch(r'-?\d+(?:\.\d+)?', val):
+                        p = key
+                cleaned.append(p)
+            return '__'.join(cleaned)
+        
+        print(f"Running LOPO feature selection...")
+        
+        for i, (train_idx, test_idx) in enumerate(logo.split(X_all, y_all, groups)):
+            held_out_participants = list(np.unique(groups[test_idx]))
+            print(f"LOPO iteration {i+1}/{len(all_pids)}: Holding out {held_out_participants}")
+            
+            X_train = X_all.iloc[train_idx]
+            y_train = y_all.iloc[train_idx]
+            
+            selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(
+                X_train, y_train, n_jobs=selector_n_jobs
+            )
+            
+            # Filter duplicates
+            feature_groups = {}
+            for feature_name, importance in importances.items():
+                base_name = get_feature_base_name(feature_name)
+                if base_name not in feature_groups or importance > feature_groups[base_name][1]:
+                    feature_groups[base_name] = (feature_name, importance)
+            
+            filtered_importances = pd.Series(
+                {original_name: importance for original_name, importance in feature_groups.values()},
+                name=importances.name
+            )
+            
+            all_importance_dicts.append(filtered_importances.to_dict())
+            print(f"  Selected {len(filtered_importances)} features from {len(X_train)} training samples")
     
+        # Process each top_k value using the same LOPO results
+        results = {}
+        
+        for top_k in top_k_values:
+            print(f"\nProcessing top_{top_k} features...")
+            
+            # Create subfolder for this top_k value
+            results_dir_topk = os.path.join(results_dir, f"top_{top_k}")
+            os.makedirs(results_dir_topk, exist_ok=True)
+            
+            # Generate top_k feature sets for each LOPO iteration
+            top_k_feature_sets = []
+            for importance_dict in all_importance_dicts:
+                sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                top_k_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
+                top_k_feature_sets.append(set(top_k_features))
+            
+            # Calculate prevalence-based combined feature set
+            feature_prevalence = {}
+            for feature_set in top_k_feature_sets:
+                for feature in feature_set:
+                    feature_prevalence[feature] = feature_prevalence.get(feature, 0) + 1
+            
+            def calculate_max_importance(feature_name, importance_dicts):
+                scores = [d.get(feature_name, 0) for d in importance_dicts]
+                return max(scores) if scores else 0
+            
+            feature_ranking = []
+            for feature, prevalence in feature_prevalence.items():
+                max_importance = calculate_max_importance(feature, all_importance_dicts)
+                feature_ranking.append((feature, prevalence, max_importance))
+            
+            feature_ranking.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            
+            top_k_prevalent = feature_ranking[:top_k]
+            prevalence_features = [feature for feature, _, _ in top_k_prevalent]
+            
+            prevalence_importances = {
+                feature: calculate_max_importance(feature, all_importance_dicts) 
+                for feature in prevalence_features
+            }
+            
+            # Save results
+            def export_features_json(ef: dict, filepath):
+                with open(filepath, 'w') as outfile:
+                    json.dump(ef, outfile, indent=4)
+            
+            prevalence_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_top{top_k}_features.json")
+            export_features_json(prevalence_importances, prevalence_path)
+            
+            prevalence_analysis = []
+            for feature, prevalence, max_importance in top_k_prevalent:
+                prevalence_analysis.append({
+                    'feature': feature,
+                    'prevalence': prevalence,
+                    'prevalence_percentage': (prevalence / len(all_pids)) * 100,
+                    'max_importance': max_importance,
+                    'appeared_in_iterations': f"{prevalence}/{len(all_pids)}"
+                })
+            
+            prevalence_df = pd.DataFrame(prevalence_analysis)
+            prevalence_analysis_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_analysis.csv")
+            prevalence_df.to_csv(prevalence_analysis_path, index=False)
+            
+            print(f"Top {top_k} results: {len(prevalence_features)} features -> {prevalence_path}")
+            
+            # Run K-fold CV for this top_k
+            cv_results = UpperBodyClassifier.k_fold_cross_validation(
+                out_root, datatype, event, results_dir_topk, prevalence_features, k_folds, rf_n_jobs, top_k=top_k
+            )
+            
+            results[f'top_{top_k}'] = {
+                'features': prevalence_features,
+                'cv_results': cv_results
+            }
+        
+        return results
+
 
 class UpperBodyKinematics(Enum):
     pelvis = ["pelvis_tilt", "pelvis_list", "pelvis_rotation", "pelvis_tx", "pelvis_ty", "pelvis_tz"]
@@ -895,7 +1015,7 @@ if __name__ == "__main__":
                         selector_n_jobs,
                         rf_n_jobs,
                         5,  # k_folds
-                        TOP_K  # current top_k value
+                        [100, 50, 20, 10]  # top_k_values
                     ) for ev in events
                 )
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} top_{TOP_K} END")
