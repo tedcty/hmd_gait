@@ -775,21 +775,14 @@ class UpperBodyClassifier:
         
         print(f"Starting LOPO feature selection and CV for {datatype} - {event}")
         
-        # Step 1: LOPO feature selection
+        # Step 1: LOPO feature selection (prevalence-based)
         combined_features, feature_results = UpperBodyClassifier.leave_one_participant_out_feature_selection(
             out_root, datatype, event, results_dir, selector_n_jobs
         )
         
+        # Prevalence-based selection always returns features, so no need for fallback
         if len(combined_features) == 0:
-            print("No features survived majority vote. Trying union instead...")
-            # Load union features from JSON file
-            union_path = os.path.join(results_dir, f"{datatype}_{event}_union_top100_features.json")
-            if os.path.exists(union_path):
-                with open(union_path, "r") as f:
-                    union_features = json.load(f)
-                combined_features = list(union_features.keys())
-            else:
-                raise ValueError("No features available for cross-validation")
+            raise ValueError("No features returned from prevalence-based selection - this should not happen")
         
         # Step 2: K-fold cross-validation
         cv_results = UpperBodyClassifier.k_fold_cross_validation(
