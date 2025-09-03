@@ -967,9 +967,6 @@ if __name__ == "__main__":
     RUN_EXTRACT = True
     RUN_SELECT_AND_TRAIN = False
 
-    # Configuration for current top_k value - change this when you want to run different values
-    TOP_K = 100  # Change to 50, 20, or 10 for different runs
-
     # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
     events_n_jobs = 2
@@ -1005,7 +1002,7 @@ if __name__ == "__main__":
         # Select and train/test for current TOP_K value
         if RUN_SELECT_AND_TRAIN:
             for datatype in datatypes:
-                write_status(status_file, f"[SELECT+TRAIN] {datatype} top_{TOP_K} BEGIN")
+                write_status(status_file, f"[SELECT+TRAIN] {datatype} BEGIN")
                 Parallel(n_jobs=events_n_jobs, prefer="threads")(
                     delayed(UpperBodyClassifier.lopo_feature_selection_and_cv)(
                         out_root, 
@@ -1018,7 +1015,7 @@ if __name__ == "__main__":
                         [100, 50, 20, 10]  # top_k_values
                     ) for ev in events
                 )
-                write_status(status_file, f"[SELECT+TRAIN] {datatype} top_{TOP_K} END")
+                write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
 
         write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
