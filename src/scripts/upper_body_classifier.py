@@ -825,8 +825,8 @@ class UpperBodyIMU(Enum):
     # right_shoulder = "RightShoulder"
     # left_upper_arm = "LeftUpperArm"
     # right_upper_arm = "RightUpperArm"
-    pelvis = "Pelvis"
-    # sternum = "T8"
+    # pelvis = "Pelvis"
+    sternum = "T8"
 
 
 if __name__ == "__main__":
