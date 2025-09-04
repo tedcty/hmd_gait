@@ -580,9 +580,8 @@ if __name__ == "__main__":
     events_n_jobs = 2
     tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
     # Both selection and training get equal core allocation
-    cores_per_event = max(1, total_cores // events_n_jobs)
-    selector_n_jobs = cores_per_event
-    rf_n_jobs = cores_per_event
+    selector_n_jobs = tsfresh_n_jobs
+    rf_n_jobs = tsfresh_n_jobs
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
@@ -611,18 +610,18 @@ if __name__ == "__main__":
         if RUN_SELECT_AND_TRAIN:
             for datatype in datatypes:
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} BEGIN")
-                Parallel(n_jobs=events_n_jobs, prefer="threads")(
-                    delayed(UpperBodyClassifier.lopo_feature_selection_and_cv)(
-                        out_root, 
-                        datatype, 
-                        ev, 
+                # Run events in series instead of parallel
+                for ev in events:
+                    UpperBodyClassifier.lopo_feature_selection_and_cv(
+                        out_root,
+                        datatype,
+                        ev,
                         os.path.join(models_root, datatype, ev.replace(" ", "_")),
                         selector_n_jobs,
                         rf_n_jobs,
                         5,  # k_folds
                         [100, 50, 20, 10]  # top_k_values
-                    ) for ev in events
-                )
+                    )
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
 
         write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
