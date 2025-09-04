@@ -936,16 +936,16 @@ class UpperBodyKinematics(Enum):
 
 
 class UpperBodyIMU(Enum):
-    # head = "Head"
-    # left_forearm = "LeftForeArm"
-    # right_forearm = "RightForeArm"
-    # left_hand = "LeftHand"
-    # right_hand = "RightHand"
-    # left_shoulder = "LeftShoulder"
-    # right_shoulder = "RightShoulder"
-    # left_upper_arm = "LeftUpperArm"
-    # right_upper_arm = "RightUpperArm"
-    # pelvis = "Pelvis"
+    head = "Head"
+    left_forearm = "LeftForeArm"
+    right_forearm = "RightForeArm"
+    left_hand = "LeftHand"
+    right_hand = "RightHand"
+    left_shoulder = "LeftShoulder"
+    right_shoulder = "RightShoulder"
+    left_upper_arm = "LeftUpperArm"
+    right_upper_arm = "RightUpperArm"
+    pelvis = "Pelvis"
     sternum = "T8"
 
 
@@ -954,7 +954,7 @@ if __name__ == "__main__":
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
     # datatypes = ["IMU", "Kinematics"]
-    datatypes = ["IMU"]
+    datatypes = ["Kinematics"]
 
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
