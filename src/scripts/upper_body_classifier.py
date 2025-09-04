@@ -954,7 +954,7 @@ if __name__ == "__main__":
     # Set up inputs
     root_dir = "Z:/Upper Body/Events/"
     # datatypes = ["IMU", "Kinematics"]
-    datatypes = ["Kinematics"]
+    datatypes = ["IMU"]
 
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
@@ -964,8 +964,8 @@ if __name__ == "__main__":
     status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
 
     # Toggles
-    RUN_EXTRACT = True
-    RUN_SELECT_AND_TRAIN = False
+    RUN_EXTRACT = False
+    RUN_SELECT_AND_TRAIN = True
 
     # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
