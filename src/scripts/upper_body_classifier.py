@@ -335,7 +335,13 @@ class UpperBodyClassifier:
         def load_single_file(pid, Xp, Yp, all_cols):
             """Helper function to load a single file pair"""
             try:
-                X_df = pd.read_csv(Xp, index_col="window_id", dtype=np.float32)
+                # Read X file without dtype specification first, then convert only data columns
+                X_df = pd.read_csv(Xp, index_col="window_id")
+                
+                # Convert only the data columns to float32, keep index as string
+                for col in X_df.columns:
+                    X_df[col] = pd.to_numeric(X_df[col], errors='coerce').astype(np.float32)
+                
                 y_df = pd.read_csv(Yp, index_col="window_id")
                 y_sr = y_df.iloc[:, 0].astype(np.int8)
                 
