@@ -365,11 +365,295 @@ class UpperBodyClassifier:
         return selector, X_train_sel, importances
 
     @staticmethod
-    def leave_one_participant_out_feature_selection(out_root, datatype, event, results_dir, selector_n_jobs=1):
+    def k_fold_cross_validation(out_root, datatype, event, results_dir, combined_features, k=5, rf_n_jobs=1, random_state=42, top_k=None):
         """
-        Perform leave-one-participant-out feature selection using LeaveOneGroupOut.
-        Returns the raw importance dictionaries for all LOPO iterations.
-        """        
+        Perform participant-based k-fold cross-validation using the combined feature set.
+        Includes comprehensive metrics and plots.
+        """
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+        
+        if len(all_pids) < k:
+            raise ValueError(f"Need at least {k} participants for {k}-fold CV. Found: {len(all_pids)}")
+        
+        # Load all features WITH group labels
+        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
+            out_root, datatype, event, all_pids, return_groups=True
+        )
+        
+        # Restrict to combined features
+        X_all = X_all.reindex(columns=combined_features, fill_value=0)
+        
+        # Participant-based K-fold cross-validation
+        gkf = GroupKFold(n_splits=k)
+        
+        # Storage for comprehensive results
+        all_y_true = []
+        all_y_pred = []
+        all_y_proba = []
+        fold_metrics = {}
+        fold_confusion_matrices = []
+        fold_feature_importances = []
+        roc_curves_data = []
+        
+        # Add top_k info to print statements if available
+        top_k_str = f" (top {top_k})" if top_k else ""
+        print(f"Running participant-based {k}-fold cross-validation for {datatype} - {event}{top_k_str}")
+        print(f"Total samples: {len(X_all)}, Total participants: {len(np.unique(groups))}")
+        
+        for fold, (train_idx, test_idx) in enumerate(gkf.split(X_all, y_all, groups)):
+            print(f"Processing fold {fold + 1}/{k}")
+            
+            X_train_fold = X_all.iloc[train_idx]
+            X_test_fold = X_all.iloc[test_idx]
+            y_train_fold = y_all.iloc[train_idx]
+            y_test_fold = y_all.iloc[test_idx]
+            
+            # Get participant info for this fold
+            train_participants = list(np.unique(groups[train_idx]))
+            test_participants = list(np.unique(groups[test_idx]))
+            
+            print(f"  Train participants: {train_participants}")
+            print(f"  Test participants: {test_participants}")
+            
+            # Train classifier
+            clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=random_state)
+            clf.fit(X_train_fold, y_train_fold)
+            
+            # Evaluate
+            y_pred = clf.predict(X_test_fold)
+            y_proba = clf.predict_proba(X_test_fold)[:, 1]
+            
+            # Store for aggregate analysis
+            all_y_true.extend(y_test_fold.tolist())
+            all_y_pred.extend(y_pred.tolist())
+            all_y_proba.extend(y_proba.tolist())
+            
+            # Calculate fold metrics (only AUC - not in classification_report)
+            auc_score = roc_auc_score(y_test_fold, y_proba) if len(np.unique(y_test_fold)) > 1 else 0.0
+            
+            # Confusion matrix
+            cm = confusion_matrix(y_test_fold, y_pred)
+            fold_confusion_matrices.append(cm)
+            
+            # Feature importance
+            fold_feature_importances.append(clf.feature_importances_)
+            
+            # ROC curve data (only if we have both classes)
+            if len(np.unique(y_test_fold)) > 1:
+                fpr, tpr, _ = roc_curve(y_test_fold, y_proba)
+                roc_curves_data.append({'fpr': fpr, 'tpr': tpr, 'auc': auc_score})
+            
+            fold_metrics[f'fold_{fold + 1}'] = {
+                'auc': auc_score,
+                'train_size': len(X_train_fold),
+                'test_size': len(X_test_fold),
+                'train_participants': train_participants,
+                'test_participants': test_participants,
+                'confusion_matrix': cm.tolist()
+            }
+            
+            print(f"  Fold {fold + 1}: AUC={auc_score:.4f}")
+            print(f"  Train size: {len(X_train_fold)}, Test size: {len(X_test_fold)}")
+
+        # Calculate additional metrics not included in classification_report
+        overall_auc = roc_auc_score(all_y_true, all_y_proba)
+        overall_cm = confusion_matrix(all_y_true, all_y_pred)
+        
+        # Calculate summary statistics for AUC (only additional metric)
+        fold_aucs = [fold_metrics[f'fold_{i+1}']['auc'] for i in range(k)]
+        
+        # Get scikit-learn classification report as dict
+        sklearn_report = classification_report(all_y_true, all_y_pred, output_dict=True)
+        
+        summary_stats = {
+            'sklearn_classification_report': sklearn_report,
+            'additional_metrics': {
+                'overall_auc': overall_auc,
+                'cv_auc_mean': np.mean(fold_aucs),
+                'cv_auc_std': np.std(fold_aucs),
+                'overall_confusion_matrix': overall_cm.tolist()
+            },
+            'individual_folds': fold_metrics
+        }
+        
+        # Generate comprehensive plots
+        plots_dir = os.path.join(results_dir, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        # Add top_k suffix to all file names if available
+        file_suffix = f"_top{top_k}" if top_k else ""
+        
+        # 1. Confusion Matrix Heatmap
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(overall_cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=['Negative', 'Positive'], yticklabels=['Negative', 'Positive'])
+        title_suffix = f" (top {top_k})" if top_k else ""
+        plt.title(f'Overall Confusion Matrix - {datatype} {event}{title_suffix}')
+        plt.ylabel('True')
+        plt.xlabel('Predicted')
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_confusion_matrix{file_suffix}.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 2. ROC Curves for all folds
+        plt.figure(figsize=(10, 8))
+        for i, roc_data in enumerate(roc_curves_data):
+            plt.plot(roc_data['fpr'], roc_data['tpr'], alpha=0.7, 
+                    label=f'Fold {i+1} (AUC = {roc_data["auc"]:.3f})')
+        
+        # Overall ROC curve
+        overall_fpr, overall_tpr, _ = roc_curve(all_y_true, all_y_proba)
+        overall_roc_auc = auc(overall_fpr, overall_tpr)
+        plt.plot(overall_fpr, overall_tpr, 'k-', linewidth=3,
+                label=f'Overall (AUC = {overall_roc_auc:.3f})')
+        
+        plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title(f'ROC Curves - {datatype} {event}{title_suffix}')
+        plt.legend(loc="lower right")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_roc_curves{file_suffix}.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 3. Feature Prevalence (top 10 by prevalence percentage)
+        # Load the prevalence analysis data
+        prevalence_analysis_path = os.path.join(results_dir, f"{datatype}_{event}_prevalence_analysis.csv")
+        if os.path.exists(prevalence_analysis_path):
+            prevalence_df = pd.read_csv(prevalence_analysis_path)
+            top_10_prevalence = prevalence_df.head(10)
+            
+            plt.figure(figsize=(12, 8))
+            sns.barplot(data=top_10_prevalence, x='prevalence_percentage', y='feature', orient='h')
+            plt.title(f'Top 10 Features by Prevalence - {datatype} {event}{title_suffix}')
+            plt.xlabel('Prevalence Percentage (%)')
+            plt.ylabel('Feature')
+            
+            # Add prevalence count annotations to the bars
+            for i, (idx, row) in enumerate(top_10_prevalence.iterrows()):
+                plt.text(row['prevalence_percentage'] + 1, i, 
+                        f"{row['appeared_in_iterations']}", 
+                        va='center', fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_prevalence{file_suffix}.png"), dpi=300, bbox_inches='tight')
+            plt.close()
+        else:
+            # Fallback to importance-based plot if prevalence data not available
+            avg_importances = np.mean(fold_feature_importances, axis=0)
+            feature_importance_df = pd.DataFrame({
+                'feature': combined_features,
+                'importance': avg_importances
+            }).sort_values('importance', ascending=False)
+            
+            plt.figure(figsize=(12, 8))
+            top_10_features = feature_importance_df.head(10)
+            sns.barplot(data=top_10_features, x='importance', y='feature', orient='h')
+            plt.title(f'Top 10 Feature Importances - {datatype} {event}{title_suffix}')
+            plt.xlabel('Average Importance')
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_feature_prevalence{file_suffix}.png"), dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 4. Cross-Validation AUC Box Plot
+        cv_metrics_df = pd.DataFrame({
+            'AUC': fold_aucs
+        })
+        
+        plt.figure(figsize=(6, 6))
+        cv_metrics_df.boxplot()
+        plt.title(f'Cross-Validation AUC Distribution - {datatype} {event}{title_suffix}')
+        plt.ylabel('AUC Score')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f"{datatype}_{event}_cv_auc_boxplot{file_suffix}.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Save feature importances
+        if 'feature_importance_df' not in locals():
+            avg_importances = np.mean(fold_feature_importances, axis=0)
+            feature_importance_df = pd.DataFrame({
+                'feature': combined_features,
+                'importance': avg_importances
+            }).sort_values('importance', ascending=False)
+        
+        feature_importance_df.to_csv(
+            os.path.join(results_dir, f"{datatype}_{event}_feature_importances{file_suffix}.csv"),
+            index=False
+        )
+
+        # Save comprehensive text report
+        report_path = os.path.join(results_dir, f"{datatype}_{event}_classification_report{file_suffix}.txt")
+        
+        def fold_lines():
+            lines = []
+            for i in range(k):
+                fkey = f'fold_{i+1}'
+                f = fold_metrics[fkey]
+                tn, fp = f['confusion_matrix'][0]
+                fn, tp = f['confusion_matrix'][1]
+                lines.append(
+                    f"  Fold {i+1}:\n"
+                    f"    AUC: {f['auc']:.4f}\n"
+                    f"    Train size: {f['train_size']}   Test size: {f['test_size']}\n"
+                    f"    Train participants: {', '.join(map(str, f['train_participants']))}\n"
+                    f"    Test participants: {', '.join(map(str, f['test_participants']))}\n"
+                    f"    Confusion matrix (TN, FP, FN, TP): {tn}, {fp}, {fn}, {tp}\n\n"
+                )
+            return "".join(lines)
+
+        with open(report_path, "w") as f:
+            f.write(f"Classification Report - {datatype} {event}{title_suffix}\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(classification_report(all_y_true, all_y_pred))
+            f.write("\n" + "-" * 50 + "\n")
+            f.write("Summary Metrics\n")
+            f.write("-" * 50 + "\n")
+            f.write("AUC Metrics:\n")
+            f.write(f"  Overall AUC: {overall_auc:.4f}\n")
+            f.write(f"  Cross-Validation AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}\n\n")
+            f.write("Confusion Matrix (Overall):\n")
+            f.write(f"  True Negative: {overall_cm[0,0]}    False Positive: {overall_cm[0,1]}\n")
+            f.write(f"  False Negative: {overall_cm[1,0]}   True Positive: {overall_cm[1,1]}\n\n")
+            f.write("Cross-Validation Details:\n")
+            f.write(f"  Number of folds: {k}\n")
+            f.write(f"  Total samples: {len(all_y_true)}\n")
+            f.write(f"  Total participants: {len(np.unique(groups))}\n")
+            f.write(f"  Features used: {len(combined_features)}\n\n")
+            f.write("Per-Fold Breakdown:\n")
+            f.write(fold_lines())
+    
+        print(f"\nComprehensive K-Fold CV Results{top_k_str}:")
+        print(f"Overall Accuracy: {sklearn_report['accuracy']:.4f}")
+        print(f"Overall AUC: {overall_auc:.4f}")
+        print(f"Overall F1-Score: {sklearn_report['weighted avg']['f1-score']:.4f}")
+        print(f"CV AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
+        print(f"Classification report: {report_path}")
+        print(f"Plots saved to: {plots_dir}")
+        
+        # Return just the important data for programmatic use
+        return {
+            'overall_auc': overall_auc,
+            'cv_auc_mean': np.mean(fold_aucs),
+            'cv_auc_std': np.std(fold_aucs),
+            'accuracy': sklearn_report['accuracy'],
+            'f1_score': sklearn_report['weighted avg']['f1-score']
+        }
+
+    @staticmethod
+    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5, top_k_values=[100, 50, 20, 10]):
+        """
+        Complete pipeline: LOPO feature selection + K-fold CV evaluation for multiple top_k values.
+        """
+        os.makedirs(results_dir, exist_ok=True)
+        
+        print(f"Starting LOPO feature selection and CV for {datatype} - {event} (top_k values: {top_k_values})")
+        
+        # Load data once for all top_k values
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
         
@@ -378,14 +662,14 @@ class UpperBodyClassifier:
         
         print(f"Loading all data for {len(all_pids)} participants...")
         
-        # Load ALL data at once
+        # Load ALL data at once - shared across all top_k values
         X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
             out_root, datatype, event, all_pids, return_groups=True
         )
         
         print(f"Loaded {X_all.shape[0]} samples with {X_all.shape[1]} features")
         
-        # Run LOPO and collect all feature importance data
+        # Run LOPO once and collect all feature importance data
         logo = LeaveOneGroupOut()
         all_importance_dicts = []
         
@@ -427,103 +711,74 @@ class UpperBodyClassifier:
             
             all_importance_dicts.append(filtered_importances.to_dict())
             print(f"  Selected {len(filtered_importances)} features from {len(X_train)} training samples")
-        
-        # Return the raw importance data and participant count for processing by caller
-        return all_importance_dicts, len(all_pids)
-
-    @staticmethod
-    def process_top_k_features(all_importance_dicts, n_participants, datatype, event, results_dir, top_k):
-        """
-        Process LOPO results to create prevalence-based feature sets for a specific top_k value.
-        """
-        print(f"Processing top_{top_k} features...")
-        
-        # Create subfolder for this top_k value
-        results_dir_topk = os.path.join(results_dir, f"top_{top_k}")
-        os.makedirs(results_dir_topk, exist_ok=True)
-        
-        # Generate top_k feature sets for each LOPO iteration
-        top_k_feature_sets = []
-        for importance_dict in all_importance_dicts:
-            sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-            top_k_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
-            top_k_feature_sets.append(set(top_k_features))
-        
-        # Calculate prevalence-based combined feature set
-        feature_prevalence = {}
-        for feature_set in top_k_feature_sets:
-            for feature in feature_set:
-                feature_prevalence[feature] = feature_prevalence.get(feature, 0) + 1
-        
-        def calculate_max_importance(feature_name, importance_dicts):
-            scores = [d.get(feature_name, 0) for d in importance_dicts]
-            return max(scores) if scores else 0
-        
-        feature_ranking = []
-        for feature, prevalence in feature_prevalence.items():
-            max_importance = calculate_max_importance(feature, all_importance_dicts)
-            feature_ranking.append((feature, prevalence, max_importance))
-        
-        feature_ranking.sort(key=lambda x: (x[1], x[2]), reverse=True)
-        
-        top_k_prevalent = feature_ranking[:top_k]
-        prevalence_features = [feature for feature, _, _ in top_k_prevalent]
-        
-        prevalence_importances = {
-            feature: calculate_max_importance(feature, all_importance_dicts) 
-            for feature in prevalence_features
-        }
-        
-        # Save results
-        def export_features_json(ef: dict, filepath):
-            with open(filepath, 'w') as outfile:
-                json.dump(ef, outfile, indent=4)
-        
-        prevalence_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_top{top_k}_features.json")
-        export_features_json(prevalence_importances, prevalence_path)
-        
-        prevalence_analysis = []
-        for feature, prevalence, max_importance in top_k_prevalent:
-            prevalence_analysis.append({
-                'feature': feature,
-                'prevalence': prevalence,
-                'prevalence_percentage': (prevalence / n_participants) * 100,
-                'max_importance': max_importance,
-                'appeared_in_iterations': f"{prevalence}/{n_participants}"
-            })
-        
-        prevalence_df = pd.DataFrame(prevalence_analysis)
-        prevalence_analysis_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_analysis.csv")
-        prevalence_df.to_csv(prevalence_analysis_path, index=False)
-        
-        print(f"Top {top_k} results: {len(prevalence_features)} features -> {prevalence_path}")
-        
-        return prevalence_features, results_dir_topk
-
-    @staticmethod
-    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5, top_k_values=[100, 50, 20, 10]):
-        """
-        Complete pipeline: LOPO feature selection + K-fold CV evaluation for multiple top_k values.
-        """
-        os.makedirs(results_dir, exist_ok=True)
-        
-        print(f"Starting LOPO feature selection and CV for {datatype} - {event} (top_k values: {top_k_values})")
-        
-        # Step 1: LOPO feature selection (once for all top_k values)
-        all_importance_dicts, n_participants = UpperBodyClassifier.leave_one_participant_out_feature_selection(
-            out_root, datatype, event, results_dir, selector_n_jobs
-        )
-        
-        # Step 2: Process each top_k value using the same LOPO results
+    
+        # Process each top_k value using the same LOPO results
         results = {}
         
         for top_k in top_k_values:
-            # Process LOPO results for this top_k
-            prevalence_features, results_dir_topk = UpperBodyClassifier.process_top_k_features(
-                all_importance_dicts, n_participants, datatype, event, results_dir, top_k
-            )
+            print(f"\nProcessing top_{top_k} features...")
             
-            # Step 3: K-fold cross-validation for this top_k
+            # Create subfolder for this top_k value
+            results_dir_topk = os.path.join(results_dir, f"top_{top_k}")
+            os.makedirs(results_dir_topk, exist_ok=True)
+            
+            # Generate top_k feature sets for each LOPO iteration
+            top_k_feature_sets = []
+            for importance_dict in all_importance_dicts:
+                sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                top_k_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
+                top_k_feature_sets.append(set(top_k_features))
+            
+            # Calculate prevalence-based combined feature set
+            feature_prevalence = {}
+            for feature_set in top_k_feature_sets:
+                for feature in feature_set:
+                    feature_prevalence[feature] = feature_prevalence.get(feature, 0) + 1
+            
+            def calculate_max_importance(feature_name, importance_dicts):
+                scores = [d.get(feature_name, 0) for d in importance_dicts]
+                return max(scores) if scores else 0
+            
+            feature_ranking = []
+            for feature, prevalence in feature_prevalence.items():
+                max_importance = calculate_max_importance(feature, all_importance_dicts)
+                feature_ranking.append((feature, prevalence, max_importance))
+            
+            feature_ranking.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            
+            top_k_prevalent = feature_ranking[:top_k]
+            prevalence_features = [feature for feature, _, _ in top_k_prevalent]
+            
+            prevalence_importances = {
+                feature: calculate_max_importance(feature, all_importance_dicts) 
+                for feature in prevalence_features
+            }
+            
+            # Save results
+            def export_features_json(ef: dict, filepath):
+                with open(filepath, 'w') as outfile:
+                    json.dump(ef, outfile, indent=4)
+            
+            prevalence_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_top{top_k}_features.json")
+            export_features_json(prevalence_importances, prevalence_path)
+            
+            prevalence_analysis = []
+            for feature, prevalence, max_importance in top_k_prevalent:
+                prevalence_analysis.append({
+                    'feature': feature,
+                    'prevalence': prevalence,
+                    'prevalence_percentage': (prevalence / len(all_pids)) * 100,
+                    'max_importance': max_importance,
+                    'appeared_in_iterations': f"{prevalence}/{len(all_pids)}"
+                })
+            
+            prevalence_df = pd.DataFrame(prevalence_analysis)
+            prevalence_analysis_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_analysis.csv")
+            prevalence_df.to_csv(prevalence_analysis_path, index=False)
+            
+            print(f"Top {top_k} results: {len(prevalence_features)} features -> {prevalence_path}")
+            
+            # Run K-fold CV for this top_k
             cv_results = UpperBodyClassifier.k_fold_cross_validation(
                 out_root, datatype, event, results_dir_topk, prevalence_features, k_folds, rf_n_jobs, top_k=top_k
             )
@@ -610,12 +865,12 @@ if __name__ == "__main__":
         if RUN_SELECT_AND_TRAIN:
             for datatype in datatypes:
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} BEGIN")
-                # Run events in series instead of parallel
+                # Run feature selection and cross-validation in series instead of parallel
                 for ev in events:
                     UpperBodyClassifier.lopo_feature_selection_and_cv(
-                        out_root,
-                        datatype,
-                        ev,
+                        out_root, 
+                        datatype, 
+                        ev, 
                         os.path.join(models_root, datatype, ev.replace(" ", "_")),
                         selector_n_jobs,
                         rf_n_jobs,
