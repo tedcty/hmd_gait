@@ -283,7 +283,7 @@ class UpperBodyClassifier:
             print(f"Saved: {X_path}   ({X_feat.shape[0]} windows, {X_feat.shape[1]} features)")
 
     @staticmethod
-    def load_features_for_participants(out_root, datatype, event, participants, return_groups=False):
+    def load_features_for_participants(out_root, datatype, event, participants, return_groups=False, n_jobs_loading=8):
         """
         Load and combine features from multiple participants for a specific event.
         """
@@ -332,37 +332,51 @@ class UpperBodyClassifier:
         X_list, y_list, groups_list = [], [], []
         load_start = pd.Timestamp.now()
         
-        for i, (pid, Xp, Yp) in enumerate(file_list):
-            if i % 25 == 0 or i == len(file_list) - 1:  # Progress every 25 files
-                elapsed = (pd.Timestamp.now() - load_start).total_seconds()
-                rate = (i + 1) / elapsed if elapsed > 0 else 0
-                eta = (len(file_list) - i - 1) / rate if rate > 0 else 0
-                print(f"Loading {i+1}/{len(file_list)} files... ({rate:.1f} files/sec, ETA: {eta/60:.1f}min)")
-            
-            # Single read with correct dtype, immediate reindexing
-            X_df = pd.read_csv(Xp, index_col="window_id", dtype=np.float32)
-            y_df = pd.read_csv(Yp, index_col="window_id")
-            y_sr = y_df.iloc[:, 0].astype(np.int8)
-            
-            # Align indices
-            common_idx = X_df.index.intersection(y_sr.index)
-            if len(common_idx) == 0:
-                continue
+        def load_single_file(pid, Xp, Yp, all_cols):
+            """Helper function to load a single file pair"""
+            try:
+                X_df = pd.read_csv(Xp, index_col="window_id", dtype=np.float32)
+                y_df = pd.read_csv(Yp, index_col="window_id")
+                y_sr = y_df.iloc[:, 0].astype(np.int8)
                 
-            X_df = X_df.loc[common_idx]
-            y_sr = y_sr.loc[common_idx]
-            
-            # Reindex immediately
-            X_df = X_df.reindex(columns=all_cols, fill_value=np.float32(0.0))
-            
-            X_list.append(X_df)
-            y_list.append(y_sr)
-            
-            if return_groups:
-                groups_list.extend([pid] * len(X_df))
+                # Align indices
+                common_idx = X_df.index.intersection(y_sr.index)
+                if len(common_idx) == 0:
+                    return None, None, None
+                    
+                X_df = X_df.loc[common_idx]
+                y_sr = y_sr.loc[common_idx]
+                
+                # Reindex immediately
+                X_df = X_df.reindex(columns=all_cols, fill_value=np.float32(0.0))
+                
+                groups_data = [pid] * len(X_df) if return_groups else []
+                
+                return X_df, y_sr, groups_data
+            except Exception as e:
+                print(f"Error loading {Xp}: {e}")
+                return None, None, None
+        
+        # Parallel file loading
+        print(f"Loading {len(file_list)} files in parallel with {n_jobs_loading} workers...")
+        load_start = pd.Timestamp.now()
+        
+        results = Parallel(n_jobs=n_jobs_loading, prefer="threads")(
+            delayed(load_single_file)(pid, Xp, Yp, all_cols) 
+            for pid, Xp, Yp in file_list
+        )
+        
+        # Filter out failed loads and separate results
+        X_list, y_list, groups_list = [], [], []
+        for X_df, y_sr, groups_data in results:
+            if X_df is not None:
+                X_list.append(X_df)
+                y_list.append(y_sr)
+                if return_groups:
+                    groups_list.extend(groups_data)
         
         load_time = (pd.Timestamp.now() - load_start).total_seconds()
-        print(f"Data loading completed in {load_time:.1f}s")
+        print(f"Parallel loading completed in {load_time:.1f}s")
         
         # Single concatenation
         concat_start = pd.Timestamp.now()
@@ -681,7 +695,10 @@ class UpperBodyClassifier:
         }
 
     @staticmethod
-    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, selector_n_jobs=1, rf_n_jobs=1, k_folds=5, top_k_values=[100, 50, 20, 10]):
+    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, 
+                                  selector_n_jobs=1, rf_n_jobs=1, k_folds=5, 
+                                  top_k_values=[100, 50, 20, 10], 
+                                  loading_n_jobs=8):
         """
         Complete pipeline: LOPO feature selection + K-fold CV evaluation for multiple top_k values.
         """
@@ -700,7 +717,8 @@ class UpperBodyClassifier:
         
         # Load ALL data at once - shared across all top_k values
         X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
-            out_root, datatype, event, all_pids, return_groups=True
+            out_root, datatype, event, all_pids, return_groups=True, 
+            n_jobs_loading=loading_n_jobs
         )
         
         print(f"Loaded {X_all.shape[0]} samples with {X_all.shape[1]} features")
@@ -866,13 +884,26 @@ if __name__ == "__main__":
     RUN_EXTRACT = False
     RUN_SELECT_AND_TRAIN = True
 
-    # 2 events in parallel, more cores per tsfresh
     total_cores = multiprocessing.cpu_count()
-    events_n_jobs = 2
-    tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
-    # Both selection and training get equal core allocation
-    selector_n_jobs = tsfresh_n_jobs
-    rf_n_jobs = tsfresh_n_jobs
+    print(f"Total available cores: {total_cores}")
+    
+    if RUN_EXTRACT:
+        # For extraction: parallel events with cores for tsfresh
+        events_n_jobs = 2
+        tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
+        print(f"Extraction: {events_n_jobs} events in parallel, {tsfresh_n_jobs} cores per tsfresh")
+    
+    if RUN_SELECT_AND_TRAIN:
+        # Optimise for different workload types        
+        loading_n_jobs = min(12, max(4, total_cores // 4))
+        remaining_cores = total_cores - 2  # Leave 2 for system
+        selector_n_jobs = max(4, remaining_cores // 2)
+        rf_n_jobs = max(4, remaining_cores // 2)
+        
+        print(f"Core allocation:")
+        print(f"  Loading: {loading_n_jobs} cores")
+        print(f"  Feature selection: {selector_n_jobs} cores") 
+        print(f"  Random Forest: {rf_n_jobs} cores")
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
