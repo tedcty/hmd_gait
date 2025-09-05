@@ -894,16 +894,19 @@ if __name__ == "__main__":
         print(f"Extraction: {events_n_jobs} events in parallel, {tsfresh_n_jobs} cores per tsfresh")
     
     if RUN_SELECT_AND_TRAIN:
-        # Optimise for different workload types        
-        loading_n_jobs = min(12, max(4, total_cores // 4))
-        remaining_cores = total_cores - 2  # Leave 2 for system
-        selector_n_jobs = max(4, remaining_cores // 2)
-        rf_n_jobs = max(4, remaining_cores // 2)
+        # For selection and training
+        total_cores = multiprocessing.cpu_count()
+        system_cores = 2  # Reserve for system
+        loading_n_jobs = min(16, total_cores - system_cores)
         
-        print(f"Core allocation:")
-        print(f"  Loading: {loading_n_jobs} cores")
-        print(f"  Feature selection: {selector_n_jobs} cores") 
-        print(f"  Random Forest: {rf_n_jobs} cores")
+        cpu_cores = total_cores - system_cores
+        selector_n_jobs = cpu_cores
+        rf_n_jobs = cpu_cores
+        
+        print(f"Sequential core allocation:")
+        print(f"  Loading: {loading_n_jobs} cores (I/O bound)")
+        print(f"  Feature selection: {selector_n_jobs} cores (CPU intensive)")
+        print(f"  Random Forest: {rf_n_jobs} cores (CPU intensive)")
 
     def write_status(path, msg):
         with open(path, "a", encoding="utf-8") as f:
