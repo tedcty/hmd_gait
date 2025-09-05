@@ -18,6 +18,7 @@ from event_constants import (WHOLE_EVENTS, REPETITIVE_EVENTS, EVENT_SIZES, Event
 from trim_events import compute_whole_event_std_global, read_event_labels
 from datetime import datetime
 import re
+import psutil
 
 
 class UpperBodyClassifier:
@@ -287,9 +288,17 @@ class UpperBodyClassifier:
         Load and combine features from multiple participants for a specific event.
         """
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
-        X_list, y_list, groups_list = [], [], []
+        
+        def print_memory_usage():
+            process = psutil.Process()
+            memory_gb = process.memory_info().rss / (1024**3)
+            print(f"Memory usage: {memory_gb:.2f} GB")
+        
+        print("Scanning files and collecting column names...")
+        file_list = []
         all_cols_set = set()
         
+        scan_start = pd.Timestamp.now()
         for pid in participants:
             pid_path = os.path.join(base, pid)
             if not os.path.isdir(pid_path):
@@ -303,44 +312,71 @@ class UpperBodyClassifier:
                         stem = fname[:-6]
                         Xp = os.path.join(sensor_path, f"{stem}_X.csv")
                         Yp = os.path.join(sensor_path, f"{stem}_y.csv")
-                        if not os.path.exists(Yp):
-                            continue
-                        X_df = pd.read_csv(Xp, index_col="window_id")
-                        y_df = pd.read_csv(Yp, index_col="window_id")
-                        y_sr = y_df.iloc[:, 0].astype(np.int8)
-                        common_idx = X_df.index.intersection(y_sr.index)
-                        if len(common_idx) == 0:
-                            continue
-                        X_df = X_df.loc[common_idx]
-                        y_sr = y_sr.loc[common_idx]
-                        
-                        # Convert to float32
-                        numeric_cols = X_df.select_dtypes(include=[np.number]).columns
-                        X_df[numeric_cols] = X_df[numeric_cols].astype(np.float32)
-                        
-                        all_cols_set.update(X_df.columns)
-                        X_list.append(X_df)
-                        y_list.append(y_sr)
-                        
-                        # Create group labels for this participant's samples
-                        if return_groups:
-                            groups_list.extend([pid] * len(X_df))
+                        if os.path.exists(Yp):
+                            file_list.append((pid, Xp, Yp))
+                            
+                            # Read only header for column names
+                            sample_df = pd.read_csv(Xp, index_col="window_id", nrows=0)
+                            all_cols_set.update(sample_df.columns)
     
-        if not X_list:
+        scan_time = (pd.Timestamp.now() - scan_start).total_seconds()
+        print(f"File scan completed in {scan_time:.1f}s - Found {len(file_list)} files with {len(all_cols_set)} features")
+        
+        if not file_list:
             raise RuntimeError("No CSV features found for given participants.")
         
         all_cols = sorted(all_cols_set)
-        X_list_reindexed = [df.reindex(columns=all_cols, fill_value=np.float32(0.0)) for df in X_list]
+        print_memory_usage()
         
-        for i, df in enumerate(X_list_reindexed):
-            numeric_cols = df.select_dtypes(include=[np.number]).columns
-            df[numeric_cols] = df[numeric_cols].astype(np.float32)
-            X_list_reindexed[i] = df
+        # Data loading with progress tracking
+        X_list, y_list, groups_list = [], [], []
+        load_start = pd.Timestamp.now()
         
-        X_all = pd.concat(X_list_reindexed, axis=0)
+        for i, (pid, Xp, Yp) in enumerate(file_list):
+            if i % 25 == 0 or i == len(file_list) - 1:  # Progress every 25 files
+                elapsed = (pd.Timestamp.now() - load_start).total_seconds()
+                rate = (i + 1) / elapsed if elapsed > 0 else 0
+                eta = (len(file_list) - i - 1) / rate if rate > 0 else 0
+                print(f"Loading {i+1}/{len(file_list)} files... ({rate:.1f} files/sec, ETA: {eta/60:.1f}min)")
+            
+            # Single read with correct dtype, immediate reindexing
+            X_df = pd.read_csv(Xp, index_col="window_id", dtype=np.float32)
+            y_df = pd.read_csv(Yp, index_col="window_id")
+            y_sr = y_df.iloc[:, 0].astype(np.int8)
+            
+            # Align indices
+            common_idx = X_df.index.intersection(y_sr.index)
+            if len(common_idx) == 0:
+                continue
+                
+            X_df = X_df.loc[common_idx]
+            y_sr = y_sr.loc[common_idx]
+            
+            # Reindex immediately
+            X_df = X_df.reindex(columns=all_cols, fill_value=np.float32(0.0))
+            
+            X_list.append(X_df)
+            y_list.append(y_sr)
+            
+            if return_groups:
+                groups_list.extend([pid] * len(X_df))
+        
+        load_time = (pd.Timestamp.now() - load_start).total_seconds()
+        print(f"Data loading completed in {load_time:.1f}s")
+        
+        # Single concatenation
+        concat_start = pd.Timestamp.now()
+        print("Concatenating DataFrames...")
+        X_all = pd.concat(X_list, axis=0)
         y_all = pd.concat(y_list, axis=0).astype(np.int8)
+        concat_time = (pd.Timestamp.now() - concat_start).total_seconds()
         
-        print(f"Loaded features shape: {X_all.shape}")
+        print(f"Concatenation completed in {concat_time:.1f}s")
+        print(f"Final features shape: {X_all.shape}")
+        print_memory_usage()
+        
+        total_time = scan_time + load_time + concat_time
+        print(f"Total loading time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
         
         if return_groups:
             groups = np.array(groups_list)
