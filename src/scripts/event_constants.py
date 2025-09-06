@@ -18,14 +18,14 @@ REPETITIVE_EVENTS: Set[str] = {
 
 class EventWindowSize(Enum):
     events = {
-        "Straight walk": 110,
-        "Stair up": 130,
-        "Stair down": 110,
-        "Pick up basketball": 150,
         "Dribbling basketball": 80,
+        "Pick up basketball": 150,
         "Put down basketball": 180,
+        "Step over cone": 160,
+        "Stair down": 110,
+        "Stair up": 130,
         "Place ping pong ball in cup": 250,
-        "Step over cone": 160
+        "Straight walk": 110
     }
 
 # Pull sizes directly from enum
