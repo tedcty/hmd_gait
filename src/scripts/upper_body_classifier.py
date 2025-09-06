@@ -414,31 +414,30 @@ class UpperBodyClassifier:
         selector = FeatureSelector(n_jobs=n_jobs)  # Add n_jobs parameter
         X_train_sel = selector.fit_transform(X_train, y_train)
         # Fit a RandomForestClassifier on the selected features
-        rf = RandomForestClassifier(n_jobs=n_jobs)  # Also parallelize RF
+        rf = RandomForestClassifier(n_jobs=n_jobs, random_state=42)  # Also parallelize RF
         rf.fit(X_train_sel, y_train)
         # Get feature importances
         importances = pd.Series(rf.feature_importances_, X_train_sel.columns)
         return selector, X_train_sel, importances
 
     @staticmethod
-    def k_fold_cross_validation(out_root, datatype, event, results_dir, combined_features, k=5, rf_n_jobs=1, random_state=42, top_k=None):
+    def k_fold_cross_validation(out_root, datatype, event, results_dir, combined_features, k=5, rf_n_jobs=1, top_k=None, preloaded_data=None):
         """
         Perform participant-based k-fold cross-validation using the combined feature set.
-        Includes comprehensive metrics and plots.
         """
-        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
-        all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
-        
-        if len(all_pids) < k:
-            raise ValueError(f"Need at least {k} participants for {k}-fold CV. Found: {len(all_pids)}")
-        
-        # Load all features WITH group labels
-        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
-            out_root, datatype, event, all_pids, return_groups=True
-        )
+        if preloaded_data is not None:
+            # Use preloaded data
+            X_all, y_all, groups = preloaded_data
+            print(f"Using preloaded data: {X_all.shape}")
+        else:
+            base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+            all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+            X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
+                out_root, datatype, event, all_pids, return_groups=True
+            )
         
         # Restrict to combined features
-        X_all = X_all.reindex(columns=combined_features, fill_value=0)
+        X_all = X_all.reindex(columns=combined_features, fill_value=np.float32(0.0))
         
         # Participant-based K-fold cross-validation
         gkf = GroupKFold(n_splits=k)
@@ -473,7 +472,7 @@ class UpperBodyClassifier:
             print(f"  Test participants: {test_participants}")
             
             # Train classifier
-            clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=random_state)
+            clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
             clf.fit(X_train_fold, y_train_fold)
             
             # Evaluate
@@ -513,7 +512,10 @@ class UpperBodyClassifier:
             print(f"  Train size: {len(X_train_fold)}, Test size: {len(X_test_fold)}")
 
         # Calculate additional metrics not included in classification_report
-        overall_auc = roc_auc_score(all_y_true, all_y_proba)
+        if len(np.unique(all_y_true)) > 1:
+            overall_auc = roc_auc_score(all_y_true, all_y_proba)
+        else:
+            overall_auc = 0.0
         overall_cm = confusion_matrix(all_y_true, all_y_pred)
         
         # Calculate summary statistics for AUC (only additional metric)
@@ -559,10 +561,13 @@ class UpperBodyClassifier:
                     label=f'Fold {i+1} (AUC = {roc_data["auc"]:.3f})')
         
         # Overall ROC curve
-        overall_fpr, overall_tpr, _ = roc_curve(all_y_true, all_y_proba)
-        overall_roc_auc = auc(overall_fpr, overall_tpr)
-        plt.plot(overall_fpr, overall_tpr, 'k-', linewidth=3,
-                label=f'Overall (AUC = {overall_roc_auc:.3f})')
+        if len(np.unique(all_y_true)) > 1:
+            overall_fpr, overall_tpr, _ = roc_curve(all_y_true, all_y_proba)
+            overall_roc_auc = auc(overall_fpr, overall_tpr)
+            plt.plot(overall_fpr, overall_tpr, 'k-', linewidth=3,
+                    label=f'Overall (AUC = {overall_roc_auc:.3f})')
+        else:
+            overall_roc_auc = 0.0
         
         plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
         plt.xlim([0.0, 1.0])
@@ -712,7 +717,7 @@ class UpperBodyClassifier:
         
         print(f"Starting LOPO feature selection and CV for {datatype} - {event} (top_k values: {top_k_values})")
         
-        # Load data once for all top_k values
+        # Load data ONCE at the beginning
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
         
@@ -840,7 +845,9 @@ class UpperBodyClassifier:
             
             # Run K-fold CV for this top_k
             cv_results = UpperBodyClassifier.k_fold_cross_validation(
-                out_root, datatype, event, results_dir_topk, prevalence_features, k_folds, rf_n_jobs, top_k=top_k
+                out_root, datatype, event, results_dir_topk, prevalence_features, 
+                k_folds, rf_n_jobs, top_k=top_k,
+                preloaded_data=(X_all, y_all, groups)
             )
             
             results[f'top_{top_k}'] = {
@@ -880,7 +887,8 @@ if __name__ == "__main__":
     datatypes = ["IMU"]
 
     # Get all event names from the enum
-    events = list(EventWindowSize.events.value.keys())
+    events_all = list(EventWindowSize.events.value.keys())
+    events = [e for e in events_all if e.lower() != "straight walk"]  # Excluded events
 
     out_root = "Z:/Upper Body/Results/10 Participants/features"
     models_root = "Z:/Upper Body/Results/10 Participants/models"
@@ -951,7 +959,8 @@ if __name__ == "__main__":
                         selector_n_jobs,
                         rf_n_jobs,
                         5,  # k_folds
-                        [100, 50, 20, 10]  # top_k_values
+                        [100, 50, 20, 10],  # top_k_values
+                        loading_n_jobs=loading_n_jobs
                     )
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
 
