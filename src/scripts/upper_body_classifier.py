@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from enum import Enum
 import json
+import joblib
 from joblib import Parallel, delayed
 from ptb.ml.ml_util import MLOperations
 from ptb.util.math.filters import Butterworth
@@ -335,7 +336,7 @@ class UpperBodyClassifier:
         def load_single_file(pid, Xp, Yp, all_cols):
             """Helper function to load a single file pair"""
             try:
-                # Read X file without dtype specification first, then convert only data columns
+                # Read X file without dtype specification, then convert only data columns
                 X_df = pd.read_csv(Xp, index_col="window_id")
                 
                 # Convert only the data columns to float32, keep index as string
@@ -475,6 +476,13 @@ class UpperBodyClassifier:
             clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
             clf.fit(X_train_fold, y_train_fold)
             
+            # Save trained model with 10_participants in filename
+            models_dir = os.path.join(results_dir, "trained_models")
+            os.makedirs(models_dir, exist_ok=True)
+            # model_filename = f"{datatype}_{event.replace(' ', '_')}_10_participants_fold{fold+1}{file_suffix}_rf_model.pkl"
+            # model_path = os.path.join(models_dir, model_filename)
+            # joblib.dump(clf, model_path)
+
             # Evaluate
             y_pred = clf.predict(X_test_fold)
             y_proba = clf.predict_proba(X_test_fold)[:, 1]
@@ -696,6 +704,17 @@ class UpperBodyClassifier:
         print(f"Classification report: {report_path}")
         print(f"Plots saved to: {plots_dir}")
         
+        # Train final model on all data and save it
+        print(f"Training final model on all data...")
+        final_clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
+        final_clf.fit(X_all, y_all)
+        
+        # Save in the main results_dir (models folder) instead of a subfolder
+        final_model_filename = f"{datatype}_{event.replace(' ', '_')}_10_participants_final{file_suffix}_rf_model.pkl"
+        final_model_path = os.path.join(results_dir, final_model_filename)
+        joblib.dump(final_clf, final_model_path)
+        print(f"Saved final model: {final_model_path}")
+        
         # Return just the important data for programmatic use
         return {
             'overall_auc': overall_auc,
@@ -896,7 +915,7 @@ if __name__ == "__main__":
 
     # Get all event names from the enum
     events_all = list(EventWindowSize.events.value.keys())
-    events = [e for e in events_all if e.lower() not in ["straight walk", "dribbling basketball", "pick up basketball"]]  # Excluded events
+    events = [e for e in events_all if e.lower() not in ["dribbling basketball", "pick up basketball"]]  # Excluded events
 
     out_root = "Z:/Upper Body/Results/10 Participants/features"
     models_root = "Z:/Upper Body/Results/10 Participants/models"
