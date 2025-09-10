@@ -917,9 +917,9 @@ if __name__ == "__main__":
     events_all = list(EventWindowSize.events.value.keys())
     events = [e for e in events_all if e.lower() not in ["dribbling basketball", "pick up basketball"]]  # Excluded events
 
-    out_root = "Z:/Upper Body/Results/10 Participants/features"
-    models_root = "Z:/Upper Body/Results/10 Participants/models"
-    status_file = "Z:/Upper Body/Results/10 Participants/processing_status.txt"
+    out_root = "/hpc/vlee669/Results/10 Participants/features"
+    models_root = "/hpc/vlee669/Results/10 Participants/models"
+    status_file = "/hpc/vlee669/Results/10 Participants/processing_status.txt"
 
     # Toggles
     RUN_EXTRACT = False
