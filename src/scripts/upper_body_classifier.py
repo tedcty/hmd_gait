@@ -20,6 +20,9 @@ from trim_events import compute_whole_event_std_global, read_event_labels
 from datetime import datetime
 import re
 import psutil
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 
 class UpperBodyClassifier:
