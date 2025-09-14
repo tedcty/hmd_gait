@@ -1,12 +1,13 @@
 import os
 from ptb.util.gait.helpers import OsimHelper
-from ptb.util.data import MocapDO, TRC
-from ptb.util.math.transformation import Cloud, Quaternion
+from ptb.util.data import MocapDO, TRC, Yatsdo
+from ptb.util.math.transformation import Cloud, Quaternion, PCAModel
+from ptb.util.math.filters import Butterworth
+from scipy import signal
+from scipy import interpolate
 
 from scipy.optimize import minimize
 from scipy.spatial.transform import Rotation
-from opensim.common import SimmSpline
-from opensim import TransformAxis, SpatialTransform
 from enum import Enum
 from tqdm import tqdm
 
@@ -14,9 +15,14 @@ import copy
 import numpy as np
 import pandas as pd
 import warnings
+from src.util.meta import Param
+import matplotlib.pyplot as plt
 warnings.filterwarnings('ignore')
 
 from multiprocessing import Pool
+from ptb.util.io.helper import drive
+from ptb.util.data import JSONSUtl
+
 
 cost_ret = []
 def eul_dist(x, y):
@@ -316,10 +322,35 @@ def worker(tt):
     except IndexError:
         pass
 
-if __name__ == '__main__':
+def initialise(work_dir = "M:/Mocap/", ext='trc'):
+    particip = [p for p in os.listdir(work_dir) if
+                os.path.isdir("{0}{1}".format(work_dir, p)) and p.lower().startswith('p')]
+    particip.sort()
+    session = {
+        p: [d for d in os.listdir("{0}{1}".format(work_dir, p)) if os.path.isdir("{0}{1}/{2}".format(work_dir, p, d))]
+        for p in particip}
+    bar = tqdm(range(len(particip)),
+               desc="scan for {0}".format(ext),
+               ascii=False, ncols=100, colour="#6e5b5b")
+    trials = {}
+    for p in particip:
+        tr = []
+        for s in session[p]:
+            for t in os.listdir("{0}{1}/{2}".format(work_dir, p, s)):
+                if t.lower().endswith(ext):
+                    tr.append("{0}{1}/{2}/{3}".format(work_dir, p, s, t))
+        trials[p] = tr
+        bar.update(1)
+    bar.close()
+    return trials
+
+def fixing_trc_files_mokka():
     work_dir = "M:/Mocap/"
-    particip =  [p for p in os.listdir(work_dir) if os.path.isdir("{0}{1}".format(work_dir, p)) and p.lower().startswith('p')]
-    session = {p: [d for d in os.listdir("{0}{1}".format(work_dir, p)) if os.path.isdir("{0}{1}/{2}".format(work_dir, p, d))] for p in particip}
+    particip = [p for p in os.listdir(work_dir) if
+                os.path.isdir("{0}{1}".format(work_dir, p)) and p.lower().startswith('p')]
+    session = {
+        p: [d for d in os.listdir("{0}{1}".format(work_dir, p)) if os.path.isdir("{0}{1}/{2}".format(work_dir, p, d))]
+        for p in particip}
     bar = tqdm(range(len(particip)),
                desc="scan for trc",
                ascii=False, ncols=100, colour="#6e5b5b")
@@ -344,4 +375,229 @@ if __name__ == '__main__':
         bar.update(1)
     bar.close()
 
+
+def static_check():
+    global markers
+    out_dir = "{0}/Meta/omc/".format(drive('Trix'))
+    if not os.path.exists(out_dir + "data_map.json"):
+        trials = initialise(ext='c3d')
+        JSONSUtl.write_json(out_dir + "data_map.json", trials)
+    else:
+        print("Load data map")
+        trials = JSONSUtl.load_json(out_dir + "data_map.json")
+    model_dir = "M:/Models/"
+    models = {m[:m.rindex(".osim")]: model_dir + m for m in os.listdir(model_dir) if m.endswith('osim')}
+    for p in trials:
+        print(p)
+        statics = []
+        motion = []
+        for t in trials[p]:
+            tt = os.path.split(t)
+            if 'cal' in tt[1].lower() or 'static' in tt[1].lower():
+                statics.append(tt)
+            else:
+                motion.append(tt)
+
+        if not os.path.exists(out_dir + p):
+            os.makedirs(out_dir + p)
+        for s in statics:
+            filename = s[0] + "/" + s[1]
+            file = s[1][:s[1].rindex('.')]
+            trial_name = Param.trials_name(file)
+            trial_con = Param.condition(file)
+            trial_idx = Param.trial_id(file)
+            try:
+                t = TRC.create_from_c3d(filename)
+            except ValueError:
+                continue
+
+            osm = OsimHelper(models[p])
+            initial_model_markers = copy.deepcopy(osm.markerset)
+            sss = t.data[0, :len(t.column_labels)] / 1000.0
+            is_there_na = np.sum(np.isnan(sss)) > 0
+            if not is_there_na:
+                markers = sss[2:].reshape([3, int(sss.shape[0] / 3)], order='F')
+                labels = []
+                labels_to_delete = []
+                for c in range(0, len(t.column_labels[2:]), 3):
+                    col = t.column_labels[2 + c]
+                    colx = col[:col.rindex("_")]
+                    labels.append(colx)
+                    if colx.startswith('*'):
+                        labels_to_delete.append(colx)
+                for m in labels_to_delete:
+                    t.marker_set.pop(m)
+                t.update_from_markerset()
+                if (len(labels) - len(labels_to_delete)) == initial_model_markers.shape[1]:
+                    t.write("{0}{1}/{2}.trc".format(out_dir, p, trial_name, trial_con, trial_idx))
+                pass
+        pass
+
+
+def sync_check():
+    out_dir = "{0}/Meta/".format(drive('Trix'))
+    if not os.path.exists(out_dir + "data_map.json"):
+        trials = initialise(ext='c3d')
+        JSONSUtl.write_json(out_dir + "data_map.json", trials)
+    else:
+        print("Load data map")
+        trials = JSONSUtl.load_json(out_dir + "data_map.json")
+
+    imu_data = "M:/Mocap/Movella_Re/"
+    part = [p for p in os.listdir(imu_data) if p.lower().startswith('p')]
+    conditions = {p: [c for c in os.listdir("{0}{1}".format(imu_data, p)) if Param.trials_name(c) is not None] for p in part}
+    imus = {}
+    offset = {}
+    for p in conditions:
+        # if p != 'P010':
+        #     continue
+        condition = conditions[p]
+        imus[p] = {}
+        offset[p] = {}
+        for c in condition:
+            imus[p][c] = ["{0}{1}/{2}/{3}".format(imu_data, p, c, d) for d in os.listdir("{0}{1}/{2}".format(imu_data, p, c)) if 'forearm' in d.lower() and (d.endswith('_vec3_2_raw.csv') or d.endswith('_vec3_raw.csv'))]
+            for im in imus[p][c]:
+                spartacus = pd.read_csv(im)
+                trial_name = Param.trials_name(c)
+                trial_condition = Param.condition(c)
+                trial_idx = Param.trial_id(c)
+                omc_match = None
+                cc = "{0}_{1}_{2}".format(trial_name, trial_condition, trial_idx)
+                for mk in trials[p]:
+                    sp = os.path.split(mk)
+                    spe = sp[1][:sp[1].rindex('.')]
+                    trial_name_omc = Param.trials_name(spe)
+                    trial_condition_omc = Param.condition(spe)
+                    trial_idx_omc = Param.trial_id(spe)
+                    try:
+                        print("{0} {1} {2} {3}".format(p , trial_name , trial_condition , trial_idx))
+                        print("{0} {1} {2} {3}".format(p , trial_name_omc , trial_condition_omc , trial_idx_omc))
+                    except TypeError:
+                        pass
+
+                    if trial_name == trial_name_omc:
+                        if trial_condition == trial_condition_omc:
+                            if trial_idx == trial_idx_omc:
+                                omc_match = mk
+                                print(mk)
+                                print(im)
+                                break
+
+                    pass
+                if omc_match is None:
+                    offset[p][cc] = np.nan
+                    continue
+
+                try:
+                    trc = TRC.create_from_c3d(omc_match)
+                except ValueError:
+                    offset[p][cc] = np.nan
+                    continue
+                if 'left' in im.lower():
+                    print('left')
+                    try:
+                        lu = trc.marker_set['L_Ulna']
+                    except KeyError:
+                        try:
+                            lu = trc.marker_set['L_Radius']
+                        except KeyError:
+                            try:
+                                lu = trc.marker_set['L_Lat_HumEpicondyle']
+                            except KeyError:
+                                try:
+                                    lu = trc.marker_set['L_Med_HumEpicondyle']
+                                except KeyError:
+                                    continue
+
+                else:
+                    print('right')
+                    try:
+                        lu = trc.marker_set['R_Ulna']
+                    except KeyError:
+                        try:
+                            lu = trc.marker_set['R_Radius']
+                        except KeyError:
+                            try:
+                                lu = trc.marker_set['R_Lat_HumEpicondyle']
+                            except KeyError:
+                                try:
+                                    lu = trc.marker_set['R_Med_HumEpicondyle']
+                                except KeyError:
+                                    continue
+
+                cols = [c for c in lu.columns]
+                cols.insert(0, 'time')
+                lux = np.zeros([len(lu.index), len(cols)])
+                lux[:, 0] = trc.x
+                lux[:, 1:] = lu.to_numpy()
+                luny = Yatsdo(pd.DataFrame(data=lux, columns=cols))
+                lun_tdp = luny.get_samples(trc.x)/1000
+                lun = np.array([np.linalg.norm(lun_tdp[i, 1:]) for i in range(0, lun_tdp.shape[0])])
+
+                # ru = trc.marker_set['R_Ulna'].to_numpy()/1000
+                # plu = PCAModel.pca_rotation(lu)
+                # plud = plu.transformed_data
+                # pru = PCAModel.pca_rotation(lu)
+                # prud = pru.transformed_data
+                spartacus['time'] = spartacus['time'] - spartacus['time'].iloc[0]
+                try:
+                    spy = Yatsdo(spartacus)
+                except ValueError:
+                    try:
+                        spy = Yatsdo(spartacus, fill_data=True)
+                    except ValueError:
+                        offset[p][cc] = np.nan
+                        continue
+                d = int(np.floor(spartacus['time'].iloc[-1]/0.01))
+                td = [k*0.01 for k in range(0, d)]
+                spartacus_tdp = spy.get_samples(td, as_pandas= True)
+                ss = spartacus_tdp[["m_acceleration_X", "m_acceleration_Y", "m_acceleration_Z"]].to_numpy()
+                # pss = PCAModel.pca_rotation(ss)
+                # pssd = pss.transformed_data
+                ssn = np.array([np.linalg.norm(ss[i, :]) for i in range(0, ss.shape[0])])
+
+                ipus = interpolate.InterpolatedUnivariateSpline(trc.x, lun)
+                ipusd = ipus.derivative()
+                ipusdd = ipusd.derivative()
+                acc = ipusdd(trc.x)
+                try:
+                    ssnb = Butterworth.butter_low_filter(ssn[0:600], 2, 100) - 9.81
+                except ValueError:
+                    offset[p][cc] = np.nan
+                    continue
+                lunb = Butterworth.butter_low_filter(acc[0:600], 2, 100)
+                cross_corr_scipy = signal.correlate(lunb, ssnb, mode='full')
+                lags = signal.correlation_lags(lunb.size, ssnb.size, mode='full')
+
+
+                aligned_lag_index = np.argmax(cross_corr_scipy)
+                aligned_lag = lags[aligned_lag_index]
+                print(aligned_lag)
+                offset[p][cc] = aligned_lag
+                # plt.figure()
+                # plt.title(p+" "+trial_name+" "+trial_condition+" "+trial_idx)
+                # plt.plot(ssnb, color='blue')
+                # plt.plot(lunb, color='red')
+                # plt.show()
+
+                pass
+    df = pd.DataFrame(data=offset)
+    df.to_csv(out_dir+"Sync.csv")
+    pass
+    # for p in trials:
+    #     print(p)
+    #     statics = []
+    #     motion = []
+    #     for t in trials[p]:
+    #         tt = os.path.split(t)
+    #         if 'cal' in tt[1].lower() or 'static' in tt[1].lower():
+    #             statics.append(tt)
+    #         else:
+    #             motion.append(tt)
+    # pass
+
+if __name__ == '__main__':
+    # fixing_trc_files_mokka()
+    # static_check()
+    sync_check()
     pass

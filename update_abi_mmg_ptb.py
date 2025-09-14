@@ -1,6 +1,7 @@
 import os
 import importlib.util
 import sys
+import time
 
 if __name__ == '__main__':
     wget_spec = importlib.util.find_spec("wget")
@@ -21,6 +22,8 @@ if __name__ == '__main__':
     url = 'https://raw.githubusercontent.com/tedcty/ptb/refs/heads/main/python_lib/ptb_src/dist/latest.txt'
     if os.path.exists(file_path):
         os.remove(file_path)
+        os.listdir("./")
+        time.sleep(0.1)
     wget.download(url, file_path)
 
     os.listdir('./resources/wheels/ptb/')
