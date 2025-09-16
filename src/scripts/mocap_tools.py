@@ -574,11 +574,11 @@ def sync_check():
                 aligned_lag = lags[aligned_lag_index]
                 print(aligned_lag)
                 offset[p][cc] = aligned_lag
-                # plt.figure()
-                # plt.title(p+" "+trial_name+" "+trial_condition+" "+trial_idx)
-                # plt.plot(ssnb, color='blue')
-                # plt.plot(lunb, color='red')
-                # plt.show()
+                plt.figure()
+                plt.title(p+" "+trial_name+" "+trial_condition+" "+trial_idx)
+                plt.plot(ssnb, color='blue')
+                plt.plot(lunb, color='red')
+                plt.show()
 
                 pass
     df = pd.DataFrame(data=offset)

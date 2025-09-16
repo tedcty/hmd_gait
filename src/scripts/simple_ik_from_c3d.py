@@ -2,36 +2,57 @@ import numpy as np
 import pandas as pd
 from ptb.util.gait.helpers import OsimHelper
 from ptb.util.io.mocap.file_formats import TRC
-from ptb.util.gait.analysis import IK
-from src.util.meta import Param
+
 import copy
 import os
-from opensim import InverseKinematicsTool, IKMarkerTask
+from opensim import InverseKinematicsTool
 
-participants = ["P001", "P010", "P011", "P012", "P014",
-                "P015", "P016", "P017", "P018", "P019",
-                "P020", "P021", "P025", "P026", "P032",
-                "P043"]
 
-def enable_disable_markers(ik_tool, marker_name, enable):
-    ikset = ik_tool.get_IKTaskSet()
-    k = {i.getName(): i for i in ikset}
-    k[marker_name].setApply(enable)
-    # for i in k:
-    #     print(i)
-    #     print(k[i].getApply())
-    #     print(k[i].getWeight())
-    #     k[i].setApply(False)
-    #     pass
-    # ikset2 = ik.get_IKTaskSet()
-    # k = [i for i in ikset2]
-    # for i in k:
-    #     print(i.getName())
-    #     print(i.getApply())
-    #     print(i.getWeight())
-    #     pass
+class Param:
+    @staticmethod
+    def trials_name(tx):
+        trials_list = {"Combination": ["Combination", "Combo", "Comb"],
+                       "Define": ["Define"],
+                       "Free": ["Free"],
+                       "Straight": ["Straight", "Str"],
+                       "Obstacle": ["Obstacle", "Osb", 'obst'],
+                       "Reactive": ["Reactive", 'Rea'],
+                       "Stairs": ["Stairs", "Stair"],
+                       "Static": ['Stat', "Cal"],
+                       "Test": ['test']
+                       }
 
-def process_c3d_to_trc_slices():
+        for s in trials_list:
+            for c in trials_list[s]:
+                if c.lower() in tx.lower():
+                    return s
+        return None
+
+    @staticmethod
+    def condition(tx):
+        con_list = {
+            "Normal": ["Norm"],
+            "AR": ["AR"],
+            "VR": ["VR"]
+        }
+
+        for s in con_list:
+            for c in con_list[s]:
+                if c.lower() in tx.lower():
+                    return s
+        return "Normal"
+
+    @staticmethod
+    def trial_id(tx):
+        c = tx.strip()[-1]
+        try:
+            a = int(c)
+            return "T{0:01d}".format(a)
+        except ValueError:
+            return "NA"
+
+
+if __name__ == '__main__':
     skips = {"P025_Combination_Normal_T1", "P025_Free_VR_T2", "P025_Straight_AR_T2", "P025_Reactive_AR_T1"}
     particpant = 'P025'
     out_dir = 'I:/Meta/metaik/{0}/'.format(particpant)
@@ -62,7 +83,7 @@ def process_c3d_to_trc_slices():
         print(trial_folder)
         if not os.path.exists(trial_folder):
             os.makedirs(trial_folder)
-        trc = TRC.create_from_c3d("{0}{1}/{2}".format(pfile, session[0],f))
+        trc = TRC.create_from_c3d("{0}{1}/{2}".format(pfile, session[0], f))
         print("Reorient markers")
         trc.z_up_to_y_up()
         n0 = [m for m in trc.marker_set if particpant in m]
@@ -77,22 +98,20 @@ def process_c3d_to_trc_slices():
             nans = {m.split(':')[1]: np.isnan(trc.marker_set[m]) for m in n}
         except IndexError:
             nans = {m: np.isnan(trc.marker_set[m]) for m in n}
-        # pop_n = [m for m in trc.marker_set if m not in n]# filter names
-        # for n in pop_n:
-        #     trc.marker_set.pop(n)
+
         print("Remove Subject Label")
         try:
             trc.marker_set = {m.split(':')[1]: trc.marker_set[m] for m in n}
         except IndexError:
             trc.marker_set = {m: trc.marker_set[m] for m in n}
 
-        mpx = [m for m in  trc.marker_set]
+        mpx = [m for m in trc.marker_set]
         print("Check for last empty column")
-        if np.sum(np.isnan(trc.marker_set[mpx[-1]].iloc[0, :])) >0:
+        if np.sum(np.isnan(trc.marker_set[mpx[-1]].iloc[0, :])) > 0:
             m0 = mpx[-1]
 
             m1 = None
-            for i in range(0, len(mpx)-1):
+            for i in range(0, len(mpx) - 1):
                 if np.sum(np.isnan(trc.marker_set[mpx[i]].iloc[0, :])) == 0:
                     m1 = mpx[i]
                     break
@@ -135,7 +154,8 @@ def process_c3d_to_trc_slices():
         for s in splits:
             task = "{1}_{2}_{3}_{4}_{5}-{6}".format(trial_folder, particpant, cname, ccon, cidx, s[0], s[1])
             print("Running {0}".format(task))
-            ik.set_output_motion_file("{0}{1}_{2}_{3}_{4}_{5}-{6}.sto".format(trial_folder, particpant, cname, ccon, cidx, s[0], s[1]))
+            ik.set_output_motion_file(
+                "{0}{1}_{2}_{3}_{4}_{5}-{6}.sto".format(trial_folder, particpant, cname, ccon, cidx, s[0], s[1]))
             ik.setStartTime(trc.data[s[0], 1])
             ik.setEndTime(trc.data[s[1], 1])
             try:
@@ -144,34 +164,5 @@ def process_c3d_to_trc_slices():
                 pass
             pass
 
-        # n0 = np.array([np.sum(n[i, : ]) for i in range(0, n.shape[0])])
         pass
-    pass
-
-if __name__ == '__main__':
-    # todo
-    # get list of participant and trials
-    # rerun the IK from c3d.
-    process_c3d_to_trc_slices()
-    # model_dir = "M:/temp/"
-    # mt = [m for m in os.listdir(model_dir) if m.lower().startswith("p")]
-    # for m in mt:
-    #     particpant = m[:m.rindex(".")]
-    #     mf = [s for s in os.listdir("M:/Mocap/{0}/".format(particpant)) if 'session' in s.lower()]
-    #     opens_model = OsimHelper("{0}{1}.osim".format(model_dir, particpant))
-    #     trials = [t for t in os.listdir("M:/Mocap/{0}/{1}".format(particpant, mf[0])) if t.endswith("c3d")]
-    #     for t in trials:
-    #         kk = ""
-    #         pass
-    #         IK.run_from_c3d(
-    #             wkdir="M:/Mocap/test/{0}/".format(particpant),
-    #             model=opens_model.osim_model.osim,
-    #             trial_c3d="M:/Mocap/{0}/{1}/{2}".format(particpant, mf[0], t))
-    #     # if particpant == "P048":
-    #     #     opens_model = OsimHelper("{0}{1}.osim".format(model_dir, particpant))
-    #     #
-    #     #     IK.run_from_c3d(
-    #     #         wkdir="M:/Mocap/test/",
-    #     #         model=opens_model.osim_model.osim,
-    #     #         trial_c3d="M:/Mocap/{0}/New Session/P048 Cal 06.c3d".format(particpant))
     pass
