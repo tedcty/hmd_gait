@@ -1,7 +1,8 @@
 import os
 import json
 import pandas as pd
-import numpy as np
+import numpy as np, csv, json
+import matplotlib.pyplot as plt
 from gias3.learning.PCA import PCA
 from upper_body_classifier import UpperBodyClassifier
 
@@ -13,9 +14,11 @@ class NormativePCAModel:
         """
         Load the top k features from the prevalence-based feature selection results.
         """
+        # Fix filename format to handle spaces in event names
+        event_filename = event.replace(' ', '_')
         feature_file = os.path.join(
             results_dir, 
-            f"{datatype}_{event}_prevalence_top100_features.json"
+            f"{datatype}_{event_filename}_prevalence_top100_features.json"
         )
         
         if not os.path.exists(feature_file):
@@ -83,7 +86,7 @@ class NormativePCAModel:
         print(f"Final data shape: {X_filtered.shape}")
         print(f"Participants in filtered data: {len(np.unique(groups_filtered))}")
         
-        return X_filtered, y_filtered, groups_filtered
+        return X_filtered, y_filtered, groups_filtered, available_features
     
     @staticmethod
     def get_available_events_and_participants(out_root, datatype):
@@ -122,6 +125,11 @@ class NormativePCAModel:
         """
         print(f"Creating normative PCA model for {datatype} - {event}")
         
+        # Create output filename and directory
+        outname = f"{datatype}_{event.replace(' ', '_')}_top{top_k_features}_pca"
+        pc_model_dir = os.path.join(results_dir, "pc_model")
+        os.makedirs(pc_model_dir, exist_ok=True)
+        
         # Load top features from prevalence-based feature selection
         top_features = NormativePCAModel.load_top_features(results_dir, datatype, event, top_k_features)
         
@@ -139,10 +147,16 @@ class NormativePCAModel:
         else:
             participants = all_participants
         
-        print(f"Using {len(participants)} participants for normative model: {participants}")
+        # Calculate n_components as n_participants - 1
+        n_participants = len(participants)
+        if n_components is None:
+            n_components = n_participants - 1
+        
+        print(f"Using {n_participants} participants for normative model: {participants}")
+        print(f"Number of components to compute: {n_components}")
         
         # Load and filter data (only event windows)
-        X_filtered, y_filtered, groups_filtered = NormativePCAModel.load_event_condition_data(
+        X_filtered, y_filtered, groups_filtered, feature_names = NormativePCAModel.load_event_condition_data(
             out_root, datatype, event, participants, top_features, filter_event_only=True
         )
         
@@ -152,22 +166,144 @@ class NormativePCAModel:
         # PCA Model
         pca = PCA()
         pca.setData(X_filtered.T)  # transposes (samples, features) to (features, samples)
-        pca.inc_svd_decompose(n_components)  # NOTE: should I have n_components or None?
+        pca.inc_svd_decompose(n_components)
         pc = pca.PC
 
-        # Create output filename and directory
-        outname = f"{datatype}_{event.replace(' ', '_')}_top{top_k_features}_pca"
-        pc_model_dir = os.path.join(results_dir, "pc_model")
+        # Explained variance
+        if hasattr(pc, 'explained_variance_ratio_') and pc.explained_variance_ratio_ is not None:
+            ratio = np.array(pc.explained_variance_ratio_, dtype=float)
+            expl = np.array(pc.explained_variance_, dtype=float)
+        else:
+            ratio = np.array(pc.getNormSpectrum(), dtype=float)
+            expl = ratio * ratio.sum()  # if absolute variance not available
         
-        if not os.path.exists(pc_model_dir):
-            os.makedirs(pc_model_dir)
+        cum = ratio.cumsum()
+
+        # Save explained variance to CSV
+        csv_path = os.path.join(pc_model_dir, f"{outname}_explained_variance.csv")
+        with open(csv_path, 'w', newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Component", "Explained Variance", "Explained Variance Ratio", "Cumulative Variance"])
+            for i, (e, r, c) in enumerate(zip(expl, ratio, cum), start=1):
+                writer.writerow([i, e, r, c])
+        print(f"Explained variance saved to {csv_path}")
+
+        # Save mean and PC loadings with feature names
+        np.savetxt(os.path.join(pc_model_dir, f"{outname}_mean.csv"), pc.mean, delimiter=",", 
+                   header="feature_means", comments="")
         
+        # Save loadings with feature names as header
+        loadings_df = pd.DataFrame(pc.modes, 
+                                   index=feature_names, 
+                                   columns=[f"PC{i+1}" for i in range(pc.modes.shape[1])])
+        loadings_df.to_csv(os.path.join(pc_model_dir, f"{outname}_loadings.csv"))
+
+        # Save projected weights (scores)
+        scores = None
+        if pc.projectedWeights is not None:
+            scores = pc.projectedWeights.T  # (samples, components)
+            scores_df = pd.DataFrame(scores, columns=[f"PC{i+1}" for i in range(scores.shape[1])])
+            scores_df.to_csv(os.path.join(pc_model_dir, f"{outname}_scores.csv"), index=False)
+
+        # PCA plots
+        k_plot = len(ratio)
+        
+        # Bar plot of explained variance %
+        plt.figure(figsize=(10, 6))
+        plt.bar([f"PC{i}" for i in range(1, k_plot + 1)], ratio * 100)
+        plt.ylabel("Explained Variance (%)")
+        plt.xlabel("Principal Component")
+        plt.title(f"Explained Variance - {event} (top{top_k_features})")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(os.path.join(pc_model_dir, f"{outname}_explained_variance.png"), dpi=300)
+        plt.close()
+        
+        # Cumulative variance plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(1, k_plot + 1), cum * 100, marker='o', linewidth=2, markersize=6)
+        plt.ylabel("Cumulative Explained Variance (%)")
+        plt.xlabel("Number of Principal Components")
+        plt.title(f"Cumulative Explained Variance - {event} (top{top_k_features})")
+        plt.grid(True, linewidth=0.5, alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(os.path.join(pc_model_dir, f"{outname}_cumulative_explained_variance.png"), dpi=300)
+        plt.close()
+        
+        # PC1 vs PC2 scores scatter plot (if available)
+        if scores is not None and scores.shape[1] >= 2:
+            plt.figure(figsize=(8, 6))
+            plt.scatter(scores[:, 0], scores[:, 1], s=12, alpha=0.6)
+            plt.xlabel("PC1 Score")
+            plt.ylabel("PC2 Score")
+            plt.title(f"PC1 vs PC2 Scores - {event} (top{top_k_features})")
+            plt.grid(True, linewidth=0.5, alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(os.path.join(pc_model_dir, f"{outname}_pc1_pc2_scatter.png"), dpi=300)
+            plt.close()
+
         # Save PCA model files
         pc.save(os.path.join(pc_model_dir, outname))
         pc.savemat(os.path.join(pc_model_dir, f"{outname}.mat"))
         print(f"Done {outname}")
         
-        return model_data
+        # Return performance metrics for comparison
+        return {
+            'event': event,
+            'n_components': len(ratio),
+            'explained_variance_ratio': ratio,
+            'cumulative_variance': cum,
+            'total_variance_explained': cum[-1] if len(cum) > 0 else 0,
+            'n_samples': X_filtered.shape[0],
+            'n_features': X_filtered.shape[1]
+        }
+
+    @staticmethod
+    def compare_models_performance(performance_results, results_dir):
+        """
+        Compare PCA models across events by variance explained.
+        """
+        if not performance_results:
+            return
+        
+        # Create comparison plots
+        events = [r['event'] for r in performance_results]
+        total_var_explained = [r['total_variance_explained'] for r in performance_results]
+        
+        # Bar plot comparing total variance explained
+        plt.figure(figsize=(12, 6))
+        bars = plt.bar(events, [v*100 for v in total_var_explained])
+        plt.ylabel("Total Variance Explained (%)")
+        plt.xlabel("Event")
+        plt.title("PCA Model Performance Comparison")
+        plt.xticks(rotation=45, ha='right')
+        
+        # Add value labels on bars
+        for bar, val in zip(bars, total_var_explained):
+            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
+                    f'{val*100:.1f}%', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(results_dir, "pca_model_comparison.png"), dpi=300)
+        plt.close()
+        
+        # Save comparison summary
+        comparison_df = pd.DataFrame([
+            {
+                'Event': r['event'],
+                'N_Components': r['n_components'],
+                'Total_Variance_Explained': f"{r['total_variance_explained']:.4f}",
+                'Total_Variance_Explained_Pct': f"{r['total_variance_explained']*100:.2f}%",
+                'N_Samples': r['n_samples'],
+                'N_Features': r['n_features'],
+                'PC1_Variance': f"{r['explained_variance_ratio'][0]:.4f}" if len(r['explained_variance_ratio']) > 0 else "N/A",
+                'PC2_Variance': f"{r['explained_variance_ratio'][1]:.4f}" if len(r['explained_variance_ratio']) > 1 else "N/A"
+            }
+            for r in performance_results
+        ])
+        
+        comparison_df.to_csv(os.path.join(results_dir, "pca_model_comparison.csv"), index=False)
+        print(f"Model comparison saved to {results_dir}")
 
 
 if __name__ == "__main__":
@@ -180,7 +316,7 @@ if __name__ == "__main__":
     
     # Parameters
     datatype = "IMU"
-    n_components = 5
+    n_components = None  # Will automatically set to n_participants - 1
     top_k_features = 10
     
     # Get all available events and participants
@@ -188,6 +324,9 @@ if __name__ == "__main__":
     print("Available events and participants:")
     for event_name, participants in available_data.items():
         print(f"  {event_name}: {len(participants)} participants")
+    
+    # Store performance results for comparison
+    performance_results = []
     
     # Process ALL events
     for event in available_data.keys():
@@ -197,16 +336,13 @@ if __name__ == "__main__":
         print(f"Available participants: {participants}")
         
         try:
-            # Create event-specific results directory
-            event_results_dir = os.path.join(results_dir, datatype, event.replace(" ", "_"))
-            os.makedirs(event_results_dir, exist_ok=True)
-            
             # Create normative PCA model
-            model_data = NormativePCAModel.create_normative_pca_model(
-                out_root, datatype, event, event_results_dir, 
+            perf_result = NormativePCAModel.create_normative_pca_model(
+                out_root, datatype, event, results_dir, 
                 n_components=n_components, top_k_features=top_k_features
             )
             
+            performance_results.append(perf_result)
             print(f"Successfully processed {event}")
             
         except Exception as e:
@@ -215,5 +351,9 @@ if __name__ == "__main__":
             traceback.print_exc()
             continue  # Continue with next event
     
+    # Compare model performances
+    NormativePCAModel.compare_models_performance(performance_results, results_dir)
+    
     print(f"\n")
     print("PCA model creation completed for all events.")
+    print(f"Performance comparison saved to {results_dir}")
