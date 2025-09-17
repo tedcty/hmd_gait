@@ -149,9 +149,20 @@ class NormativePCAModel:
                                     features_df = pd.read_csv(feature_file)
                                     labels_df = pd.read_csv(label_file)
                                     
+                                    # Extract only the 'label' column from labels_df
+                                    if 'label' in labels_df.columns:
+                                        labels = labels_df['label'].values
+                                    else:
+                                        # Fallback: assume the last column is the label
+                                        labels = labels_df.iloc[:, -1].values
+                                    
+                                    # Ensure labels and features have the same length
+                                    if len(features_df) != len(labels):
+                                        print(f"Warning: Length mismatch in {file}: features={len(features_df)}, labels={len(labels)}")
+                                    
                                     # Add to collections
                                     all_features.append(features_df)
-                                    all_labels.extend(labels_df.values.flatten())
+                                    all_labels.extend(labels)
                                     all_groups.extend([participant] * len(features_df))
                                     
                                     print(f"Loaded: {file} ({len(features_df)} samples)")
