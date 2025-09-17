@@ -84,7 +84,7 @@ class NormativePCAModel:
             datatype,
             event_filename,
             "top_100",
-            f"{datatype}_{event_filename}_prevalence_top100_features.json"
+            f"{datatype}_{event}_prevalence_top100_features.json"
         )
         
         if not os.path.exists(feature_file):
