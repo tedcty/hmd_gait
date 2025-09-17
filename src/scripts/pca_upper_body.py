@@ -301,7 +301,7 @@ class NormativePCAModel:
         
         # Create PCA model
         pca = PCA()
-        pca.setData(X_filtered.T)  # Transpose to (features, samples) format
+        pca.setData(X_filtered.values.T)  # Transpose to (features, samples) format
         pca.inc_svd_decompose(n_components)
         pc = pca.PC
 
