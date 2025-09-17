@@ -4,21 +4,77 @@ import pandas as pd
 import numpy as np, csv, json
 import matplotlib.pyplot as plt
 from gias3.learning.PCA import PCA
-from upper_body_classifier import UpperBodyClassifier
 
 
 class NormativePCAModel:
     
     @staticmethod
-    def load_top_features(results_dir, datatype, event, top_k=10):
+    def get_available_event_conditions(out_root, datatype):
+        """
+        Get all available event-condition combinations for a given datatype.
+        """
+        base_dir = os.path.join(out_root, datatype)
+        
+        if not os.path.exists(base_dir):
+            return {}
+        
+        event_conditions = {}
+        
+        for event_dir in os.listdir(base_dir):
+            event_path = os.path.join(base_dir, event_dir)
+            if os.path.isdir(event_path):
+                # Convert directory name back to event name (replace _ with space)
+                event_name = event_dir.replace("_", " ")
+                
+                # Find all condition combinations for this event
+                conditions_found = set()
+                participants = {}
+                
+                for participant_dir in os.listdir(event_path):
+                    participant_path = os.path.join(event_path, participant_dir)
+                    if os.path.isdir(participant_path):
+                        
+                        # Look through all IMU locations for this participant
+                        for imu_location in os.listdir(participant_path):
+                            imu_path = os.path.join(participant_path, imu_location)
+                            if os.path.isdir(imu_path):
+                                
+                                # Check CSV files to extract conditions
+                                for file in os.listdir(imu_path):
+                                    if file.endswith('_X.csv'):
+                                        # Extract condition from filename
+                                        # Format: P001_Combination_AR_Stair down 1_Head_X.csv
+                                        parts = file.replace('.csv', '').split('_')
+                                        
+                                        if len(parts) >= 3:
+                                            # Extract condition (AR, VR, Normal)
+                                            condition = parts[2]  # AR, VR, etc.
+                                            
+                                            # Create event-condition combination
+                                            event_condition = f"{event_name} {condition}"
+                                            conditions_found.add(event_condition)
+                                            
+                                            if event_condition not in participants:
+                                                participants[event_condition] = set()
+                                            participants[event_condition].add(participant_dir)
+                
+                # Convert sets to sorted lists
+                for event_condition in conditions_found:
+                    if event_condition in participants:
+                        event_conditions[event_condition] = sorted(list(participants[event_condition]))
+        
+        return event_conditions
+
+    @staticmethod
+    def load_top_features(results_dir, datatype, event_condition, top_k=10):
         """
         Load the top k features from the prevalence-based feature selection results.
         """
-        # Fix filename format to handle spaces in event names
-        event_filename = event.replace(' ', '_')
+        # Format filename to handle spaces and conditions
+        event_condition_filename = event_condition.replace(' ', '_')
         feature_file = os.path.join(
             results_dir, 
-            f"{datatype}_{event_filename}_prevalence_top100_features.json"
+            f"{datatype}_{event_condition_filename}_prevalence_top100_features.json"
         )
         
         if not os.path.exists(feature_file):
@@ -31,32 +87,112 @@ class NormativePCAModel:
         sorted_features = sorted(features_dict.items(), key=lambda x: x[1], reverse=True)
         top_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
         
-        print(f"Loaded top {len(top_features)} features for {datatype} - {event}")
+        print(f"Loaded top {len(top_features)} features for {datatype} - {event_condition}")
         return top_features
-    
+
     @staticmethod
-    def load_event_condition_data(out_root, datatype, event, participants, top_features, 
+    def load_features_for_event_condition(out_root, datatype, event, condition, participants, return_groups=True):
+        """
+        Load features for a specific event-condition combination by filtering files based on filename.
+        Only loads files that contain the specific condition in the filename.
+        """
+        print(f"Loading features for {event} - {condition}")
+        print(f"Participants: {participants}")
+        
+        all_features = []
+        all_labels = []
+        all_groups = []
+        
+        # Build the path to the event directory
+        event_dir = event.replace(" ", "_")
+        event_path = os.path.join(out_root, datatype, event_dir)
+        
+        if not os.path.exists(event_path):
+            raise FileNotFoundError(f"Event directory not found: {event_path}")
+        
+        for participant in participants:
+            participant_path = os.path.join(event_path, participant)
+            
+            if not os.path.exists(participant_path):
+                print(f"Warning: Participant directory not found: {participant_path}")
+                continue
+            
+            # Go through each IMU location for this participant
+            for imu_location in os.listdir(participant_path):
+                imu_path = os.path.join(participant_path, imu_location)
+                
+                if not os.path.isdir(imu_path):
+                    continue
+                
+                # Look for files that contain the specific condition in the filename
+                for file in os.listdir(imu_path):
+                    if file.endswith('_X.csv'):
+                        # Check if this file contains our condition
+                        # Format: P001_Combination_AR_Stair down 1_Head_X.csv
+                        if f"_{condition}_" in file:
+                            feature_file = os.path.join(imu_path, file)
+                            label_file = os.path.join(imu_path, file.replace('_X.csv', '_y.csv'))
+                            
+                            if os.path.exists(feature_file) and os.path.exists(label_file):
+                                # Load feature data
+                                try:
+                                    features_df = pd.read_csv(feature_file)
+                                    labels_df = pd.read_csv(label_file)
+                                    
+                                    # Add to collections
+                                    all_features.append(features_df)
+                                    all_labels.extend(labels_df.values.flatten())
+                                    all_groups.extend([participant] * len(features_df))
+                                    
+                                    print(f"Loaded: {file} ({len(features_df)} samples)")
+                                    
+                                except Exception as e:
+                                    print(f"Error loading {feature_file}: {e}")
+                                    continue
+        
+        if not all_features:
+            raise ValueError(f"No feature files found for {event} - {condition}")
+        
+        # Combine all features
+        X_combined = pd.concat(all_features, ignore_index=True)
+        y_combined = np.array(all_labels)
+        groups_combined = np.array(all_groups)
+        
+        print(f"Total samples loaded for {event} - {condition}: {len(X_combined)}")
+        print(f"Participants in data: {np.unique(groups_combined)}")
+        
+        if return_groups:
+            return X_combined, y_combined, groups_combined
+        else:
+            return X_combined, y_combined
+
+    @staticmethod
+    def load_event_condition_data(out_root, datatype, event_condition, participants, top_features, 
                                   filter_event_only=True):
         """
         Load and filter IMU feature data for a specific event-condition combination.
         """
-        print(f"Loading data for {datatype} - {event}")
+        print(f"Loading data for {datatype} - {event_condition}")
         print(f"Participants: {participants}")
         print(f"Number of features to load: {len(top_features)}")
         
-        # Load all features for the event using the existing function
-        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
-            out_root, datatype, event, participants, return_groups=True
+        # Parse event and condition from event_condition
+        parts = event_condition.split()
+        condition = parts[-1]  # Last part is condition (AR, VR, Normal)
+        event = " ".join(parts[:-1])  # Everything except last part is event name
+        
+        # Load features filtered by condition
+        X_all, y_all, groups = NormativePCAModel.load_features_for_event_condition(
+            out_root, datatype, event, condition, participants, return_groups=True
         )
         
-        # Filter to only include the top features
-        # Check which features are actually available
+        # Filter to only include the available top features
         available_features = [f for f in top_features if f in X_all.columns]
         missing_features = [f for f in top_features if f not in X_all.columns]
         
         if missing_features:
             print(f"Warning: {len(missing_features)} features not found in data:")
-            for feature in missing_features[:5]:  # Show first 5 missing features
+            for feature in missing_features[:5]:
                 print(f"  - {feature}")
             if len(missing_features) > 5:
                 print(f"  ... and {len(missing_features) - 5} more")
@@ -87,58 +223,29 @@ class NormativePCAModel:
         print(f"Participants in filtered data: {len(np.unique(groups_filtered))}")
         
         return X_filtered, y_filtered, groups_filtered, available_features
-    
-    @staticmethod
-    def get_available_events_and_participants(out_root, datatype):
-        """
-        Get all available events and participants for a given datatype.
-        """
-        base_dir = os.path.join(out_root, datatype)
-        
-        if not os.path.exists(base_dir):
-            return {}
-        
-        events_participants = {}
-        
-        for event_dir in os.listdir(base_dir):
-            event_path = os.path.join(base_dir, event_dir)
-            if os.path.isdir(event_path):
-                # Convert directory name back to event name (replace _ with space)
-                event_name = event_dir.replace("_", " ")
-                
-                participants = []
-                for participant_dir in os.listdir(event_path):
-                    participant_path = os.path.join(event_path, participant_dir)
-                    if os.path.isdir(participant_path):
-                        participants.append(participant_dir)
-                
-                if participants:
-                    events_participants[event_name] = sorted(participants)
-        
-        return events_participants
 
     @staticmethod
-    def create_normative_pca_model(out_root, datatype, event, results_dir, n_components=None, 
+    def create_normative_pca_model(out_root, datatype, event_condition, results_dir, n_components=None, 
                                    top_k_features=10, exclude_participants=None):
         """
-        Create a normative PCA model using participant data.
+        Create a normative PCA model using participant data for specific event-condition.
         """
-        print(f"Creating normative PCA model for {datatype} - {event}")
+        print(f"Creating normative PCA model for {datatype} - {event_condition}")
         
         # Create output filename and directory
-        outname = f"{datatype}_{event.replace(' ', '_')}_top{top_k_features}_pca"
+        outname = f"{datatype}_{event_condition.replace(' ', '_')}_top{top_k_features}_pca"
         pc_model_dir = os.path.join(results_dir, "pc_model")
         os.makedirs(pc_model_dir, exist_ok=True)
         
         # Load top features from prevalence-based feature selection
-        top_features = NormativePCAModel.load_top_features(results_dir, datatype, event, top_k_features)
+        top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k_features)
         
-        # Get available participants
-        available_data = NormativePCAModel.get_available_events_and_participants(out_root, datatype)
-        if event not in available_data:
-            raise ValueError(f"Event '{event}' not found in available data")
+        # Get available participants for this event-condition
+        available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
+        if event_condition not in available_data:
+            raise ValueError(f"Event-condition '{event_condition}' not found in available data")
         
-        all_participants = available_data[event]
+        all_participants = available_data[event_condition]
         
         # Exclude specified participants if any
         if exclude_participants:
@@ -157,15 +264,15 @@ class NormativePCAModel:
         
         # Load and filter data (only event windows)
         X_filtered, y_filtered, groups_filtered, feature_names = NormativePCAModel.load_event_condition_data(
-            out_root, datatype, event, participants, top_features, filter_event_only=True
+            out_root, datatype, event_condition, participants, top_features, filter_event_only=True
         )
         
         if len(X_filtered) == 0:
             raise ValueError("No event windows found for the specified participants")
         
-        # PCA Model
+        # Create PCA model
         pca = PCA()
-        pca.setData(X_filtered.T)  # transposes (samples, features) to (features, samples)
+        pca.setData(X_filtered.T)  # Transpose to (features, samples) format
         pca.inc_svd_decompose(n_components)
         pc = pca.PC
 
@@ -175,7 +282,7 @@ class NormativePCAModel:
             expl = np.array(pc.explained_variance_, dtype=float)
         else:
             ratio = np.array(pc.getNormSpectrum(), dtype=float)
-            expl = ratio * ratio.sum()  # if absolute variance not available
+            expl = ratio * ratio.sum()  # Calculate absolute variance from ratio
         
         cum = ratio.cumsum()
 
@@ -201,7 +308,7 @@ class NormativePCAModel:
         # Save projected weights (scores)
         scores = None
         if pc.projectedWeights is not None:
-            scores = pc.projectedWeights.T  # (samples, components)
+            scores = pc.projectedWeights.T  # Transpose to (samples, components)
             scores_df = pd.DataFrame(scores, columns=[f"PC{i+1}" for i in range(scores.shape[1])])
             scores_df.to_csv(os.path.join(pc_model_dir, f"{outname}_scores.csv"), index=False)
 
@@ -213,7 +320,7 @@ class NormativePCAModel:
         plt.bar([f"PC{i}" for i in range(1, k_plot + 1)], ratio * 100)
         plt.ylabel("Explained Variance (%)")
         plt.xlabel("Principal Component")
-        plt.title(f"Explained Variance - {event} (top{top_k_features})")
+        plt.title(f"Explained Variance - {event_condition} (top{top_k_features})")
         plt.xticks(rotation=45)
         plt.tight_layout()
         plt.savefig(os.path.join(pc_model_dir, f"{outname}_explained_variance.png"), dpi=300)
@@ -224,7 +331,7 @@ class NormativePCAModel:
         plt.plot(range(1, k_plot + 1), cum * 100, marker='o', linewidth=2, markersize=6)
         plt.ylabel("Cumulative Explained Variance (%)")
         plt.xlabel("Number of Principal Components")
-        plt.title(f"Cumulative Explained Variance - {event} (top{top_k_features})")
+        plt.title(f"Cumulative Explained Variance - {event_condition} (top{top_k_features})")
         plt.grid(True, linewidth=0.5, alpha=0.6)
         plt.tight_layout()
         plt.savefig(os.path.join(pc_model_dir, f"{outname}_cumulative_explained_variance.png"), dpi=300)
@@ -236,7 +343,7 @@ class NormativePCAModel:
             plt.scatter(scores[:, 0], scores[:, 1], s=12, alpha=0.6)
             plt.xlabel("PC1 Score")
             plt.ylabel("PC2 Score")
-            plt.title(f"PC1 vs PC2 Scores - {event} (top{top_k_features})")
+            plt.title(f"PC1 vs PC2 Scores - {event_condition} (top{top_k_features})")
             plt.grid(True, linewidth=0.5, alpha=0.6)
             plt.tight_layout()
             plt.savefig(os.path.join(pc_model_dir, f"{outname}_pc1_pc2_scatter.png"), dpi=300)
@@ -249,7 +356,7 @@ class NormativePCAModel:
         
         # Return performance metrics for comparison
         return {
-            'event': event,
+            'event_condition': event_condition,
             'n_components': len(ratio),
             'explained_variance_ratio': ratio,
             'cumulative_variance': cum,
@@ -261,50 +368,123 @@ class NormativePCAModel:
     @staticmethod
     def compare_models_performance(performance_results, results_dir):
         """
-        Compare PCA models across events by variance explained.
+        Compare PCA models across event-condition combinations by variance explained.
+        Creates separate comparison plots for each event.
         """
         if not performance_results:
             return
         
-        # Create comparison plots
-        events = [r['event'] for r in performance_results]
-        total_var_explained = [r['total_variance_explained'] for r in performance_results]
+        # Group results by event
+        events_data = {}
+        for result in performance_results:
+            event_condition = result['event_condition']
+            # Parse event name (everything except the last word which is condition)
+            parts = event_condition.split()
+            event = " ".join(parts[:-1])  # Event name
+            condition = parts[-1]         # Condition (AR, VR, Normal)
+            
+            if event not in events_data:
+                events_data[event] = []
+            
+            events_data[event].append({
+                'condition': condition,
+                'total_variance_explained': result['total_variance_explained'],
+                'event_condition': event_condition,
+                'result': result
+            })
         
-        # Bar plot comparing total variance explained
-        plt.figure(figsize=(12, 6))
-        bars = plt.bar(events, [v*100 for v in total_var_explained])
+        # Create separate plots for each event
+        for event, conditions_data in events_data.items():
+            # Sort conditions for consistent ordering (Normal, AR, VR)
+            condition_order = ['Normal', 'AR', 'VR']
+            conditions_data.sort(key=lambda x: condition_order.index(x['condition']) 
+                               if x['condition'] in condition_order else 999)
+            
+            conditions = [cd['condition'] for cd in conditions_data]
+            total_var_explained = [cd['total_variance_explained'] for cd in conditions_data]
+            
+            # Create individual event comparison plot
+            plt.figure(figsize=(10, 6))
+            bars = plt.bar(conditions, [v*100 for v in total_var_explained], 
+                          color=['skyblue', 'lightcoral', 'lightgreen'])
+            plt.ylabel("Total Variance Explained (%)")
+            plt.xlabel("Condition")
+            plt.title(f"PCA Model Performance Comparison - {event}")
+            plt.ylim(0, 100)  # Set consistent y-axis scale
+            
+            # Add value labels on bars
+            for bar, val in zip(bars, total_var_explained):
+                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
+                        f'{val*100:.1f}%', ha='center', va='bottom', fontweight='bold')
+            
+            plt.tight_layout()
+            # Save with event name in filename
+            event_filename = event.replace(" ", "_").replace("/", "_")
+            plt.savefig(os.path.join(results_dir, f"pca_comparison_{event_filename}.png"), dpi=300)
+            plt.close()
+            
+            print(f"Created comparison plot for {event}")
+        
+        # Create overall comparison plot for all event-conditions
+        event_conditions = [r['event_condition'] for r in performance_results]
+        total_var_explained_all = [r['total_variance_explained'] for r in performance_results]
+        
+        plt.figure(figsize=(18, 8))  # Wide figure for all combinations
+        bars = plt.bar(event_conditions, [v*100 for v in total_var_explained_all])
         plt.ylabel("Total Variance Explained (%)")
-        plt.xlabel("Event")
-        plt.title("PCA Model Performance Comparison")
+        plt.xlabel("Event-Condition Combination")
+        plt.title("PCA Model Performance Comparison - All Event-Conditions")
         plt.xticks(rotation=45, ha='right')
         
         # Add value labels on bars
-        for bar, val in zip(bars, total_var_explained):
+        for bar, val in zip(bars, total_var_explained_all):
             plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
-                    f'{val*100:.1f}%', ha='center', va='bottom')
+                    f'{val*100:.1f}%', ha='center', va='bottom', fontsize=8)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(results_dir, "pca_model_comparison.png"), dpi=300)
+        plt.savefig(os.path.join(results_dir, "pca_model_comparison_all.png"), dpi=300)
         plt.close()
         
-        # Save comparison summary
-        comparison_df = pd.DataFrame([
-            {
-                'Event': r['event'],
-                'N_Components': r['n_components'],
-                'Total_Variance_Explained': f"{r['total_variance_explained']:.4f}",
-                'Total_Variance_Explained_Pct': f"{r['total_variance_explained']*100:.2f}%",
-                'N_Samples': r['n_samples'],
-                'N_Features': r['n_features'],
-                'PC1_Variance': f"{r['explained_variance_ratio'][0]:.4f}" if len(r['explained_variance_ratio']) > 0 else "N/A",
-                'PC2_Variance': f"{r['explained_variance_ratio'][1]:.4f}" if len(r['explained_variance_ratio']) > 1 else "N/A"
-            }
-            for r in performance_results
-        ])
+        # Save detailed comparison CSV grouped by event
+        comparison_data = []
+        for event, conditions_data in events_data.items():
+            for cd in conditions_data:
+                result = cd['result']
+                comparison_data.append({
+                    'Event': event,
+                    'Condition': cd['condition'],
+                    'Event_Condition': cd['event_condition'],
+                    'N_Components': result['n_components'],
+                    'Total_Variance_Explained': f"{result['total_variance_explained']:.4f}",
+                    'Total_Variance_Explained_Pct': f"{result['total_variance_explained']*100:.2f}%",
+                    'N_Samples': result['n_samples'],
+                    'N_Features': result['n_features'],
+                    'PC1_Variance': f"{result['explained_variance_ratio'][0]:.4f}" if len(result['explained_variance_ratio']) > 0 else "N/A",
+                    'PC2_Variance': f"{result['explained_variance_ratio'][1]:.4f}" if len(result['explained_variance_ratio']) > 1 else "N/A"
+                })
         
+        comparison_df = pd.DataFrame(comparison_data)
         comparison_df.to_csv(os.path.join(results_dir, "pca_model_comparison.csv"), index=False)
-        print(f"Model comparison saved to {results_dir}")
-
+        
+        # Create summary table by event
+        summary_data = []
+        for event, conditions_data in events_data.items():
+            conditions_dict = {cd['condition']: cd['total_variance_explained'] for cd in conditions_data}
+            summary_data.append({
+                'Event': event,
+                'Normal_Variance_Pct': f"{conditions_dict.get('Normal', 0)*100:.2f}%" if 'Normal' in conditions_dict else "N/A",
+                'AR_Variance_Pct': f"{conditions_dict.get('AR', 0)*100:.2f}%" if 'AR' in conditions_dict else "N/A", 
+                'VR_Variance_Pct': f"{conditions_dict.get('VR', 0)*100:.2f}%" if 'VR' in conditions_dict else "N/A",
+                'Best_Condition': max(conditions_data, key=lambda x: x['total_variance_explained'])['condition'],
+                'Worst_Condition': min(conditions_data, key=lambda x: x['total_variance_explained'])['condition']
+            })
+        
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_csv(os.path.join(results_dir, "pca_event_summary.csv"), index=False)
+        
+        print(f"Model comparison plots and summaries saved to {results_dir}")
+        print(f"Created {len(events_data)} individual event comparison plots")
+        
 
 if __name__ == "__main__":
     # Set up paths
@@ -316,44 +496,50 @@ if __name__ == "__main__":
     
     # Parameters
     datatype = "IMU"
-    n_components = None  # Will automatically set to n_participants - 1
+    n_components = None  # Automatically set to n_participants - 1
     top_k_features = 10
     
-    # Get all available events and participants
-    available_data = NormativePCAModel.get_available_events_and_participants(out_root, datatype)
-    print("Available events and participants:")
-    for event_name, participants in available_data.items():
-        print(f"  {event_name}: {len(participants)} participants")
+    # Get all available event-condition combinations
+    available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
+    print("Available event-condition combinations:")
+    for event_condition, participants in available_data.items():
+        print(f"  {event_condition}: {len(participants)} participants")
+    
+    # TEST MODE: Limit to first 2 event-conditions for initial test
+    test_mode = True
+    if test_mode:
+        available_data = dict(list(available_data.items())[:2])
+        print("TEST MODE: Processing only first 2 event-conditions")
     
     # Store performance results for comparison
     performance_results = []
     
-    # Process ALL events
-    for event in available_data.keys():
-        participants = available_data[event]
-        print(f"\n")
-        print(f"Processing event: {event}")
+    # Process all event-condition combinations
+    for event_condition in available_data.keys():
+        participants = available_data[event_condition]
+        print(f"\n" + "="*50)
+        print(f"Processing event-condition: {event_condition}")
         print(f"Available participants: {participants}")
         
         try:
             # Create normative PCA model
             perf_result = NormativePCAModel.create_normative_pca_model(
-                out_root, datatype, event, results_dir, 
+                out_root, datatype, event_condition, results_dir, 
                 n_components=n_components, top_k_features=top_k_features
             )
             
             performance_results.append(perf_result)
-            print(f"Successfully processed {event}")
+            print(f"Successfully processed {event_condition}")
             
         except Exception as e:
-            print(f"Error processing {event}: {e}")
+            print(f"Error processing {event_condition}: {e}")
             import traceback
             traceback.print_exc()
-            continue  # Continue with next event
+            continue
     
     # Compare model performances
     NormativePCAModel.compare_models_performance(performance_results, results_dir)
     
-    print(f"\n")
-    print("PCA model creation completed for all events.")
+    print(f"\n" + "="*50)
+    print("PCA model creation completed for all event-condition combinations.")
     print(f"Performance comparison saved to {results_dir}")
