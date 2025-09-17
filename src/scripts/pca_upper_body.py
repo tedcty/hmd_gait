@@ -70,11 +70,21 @@ class NormativePCAModel:
         """
         Load the top k features from the prevalence-based feature selection results.
         """
-        # Format filename to handle spaces and conditions
-        event_condition_filename = event_condition.replace(' ', '_')
+        # Parse event and condition from event_condition
+        parts = event_condition.split()
+        condition = parts[-1]  # Last part is condition (AR, VR, Normal)
+        event = " ".join(parts[:-1])  # Everything except last part is event name
+        
+        # Format paths to match the directory structure
+        event_filename = event.replace(' ', '_')
+        
+        # Path structure: models/IMU/Event_name/top_100/IMU_Event_name_Condition_prevalence_top100_features.json
         feature_file = os.path.join(
             results_dir, 
-            f"{datatype}_{event_condition_filename}_prevalence_top100_features.json"
+            datatype,
+            event_filename,
+            "top_100",
+            f"{datatype}_{event_filename}_{condition}_prevalence_top100_features.json"
         )
         
         if not os.path.exists(feature_file):
@@ -232,10 +242,18 @@ class NormativePCAModel:
         """
         print(f"Creating normative PCA model for {datatype} - {event_condition}")
         
-        # Create output filename and directory
-        outname = f"{datatype}_{event_condition.replace(' ', '_')}_top{top_k_features}_pca"
-        pc_model_dir = os.path.join(results_dir, "pc_model")
+        # Parse event and condition from event_condition
+        parts = event_condition.split()
+        condition = parts[-1]  # Last part is condition (AR, VR, Normal)
+        event = " ".join(parts[:-1])  # Everything except last part is event name
+        event_filename = event.replace(' ', '_')
+        
+        # Create organized directory structure: pca_models/Event/Condition
+        pc_model_dir = os.path.join(results_dir, "pca_models", event_filename, condition)
         os.makedirs(pc_model_dir, exist_ok=True)
+        
+        # Create output filename (simplified since it's in organized folders)
+        outname = f"{datatype}_{event_filename}_{condition}_top{top_k_features}_pca"
         
         # Load top features from prevalence-based feature selection
         top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k_features)
@@ -374,11 +392,13 @@ class NormativePCAModel:
         if not performance_results:
             return
         
+        # Use pca_models directory for comparisons too
+        pca_models_dir = os.path.join(results_dir, "pca_models")
+        
         # Group results by event
         events_data = {}
         for result in performance_results:
             event_condition = result['event_condition']
-            # Parse event name (everything except the last word which is condition)
             parts = event_condition.split()
             event = " ".join(parts[:-1])  # Event name
             condition = parts[-1]         # Condition (AR, VR, Normal)
@@ -393,9 +413,12 @@ class NormativePCAModel:
                 'result': result
             })
         
-        # Create separate plots for each event
+        # Create separate plots for each event (save in event folder)
         for event, conditions_data in events_data.items():
-            # Sort conditions for consistent ordering (Normal, AR, VR)
+            event_filename = event.replace(" ", "_").replace("/", "_")
+            event_dir = os.path.join(pca_models_dir, event_filename)
+            
+            # Sort conditions for consistent ordering
             condition_order = ['Normal', 'AR', 'VR']
             conditions_data.sort(key=lambda x: condition_order.index(x['condition']) 
                                if x['condition'] in condition_order else 999)
@@ -403,14 +426,14 @@ class NormativePCAModel:
             conditions = [cd['condition'] for cd in conditions_data]
             total_var_explained = [cd['total_variance_explained'] for cd in conditions_data]
             
-            # Create individual event comparison plot
+            # Create individual event comparison plot (saved in event folder)
             plt.figure(figsize=(10, 6))
             bars = plt.bar(conditions, [v*100 for v in total_var_explained], 
                           color=['skyblue', 'lightcoral', 'lightgreen'])
             plt.ylabel("Total Variance Explained (%)")
             plt.xlabel("Condition")
             plt.title(f"PCA Model Performance Comparison - {event}")
-            plt.ylim(0, 100)  # Set consistent y-axis scale
+            plt.ylim(0, 100)
             
             # Add value labels on bars
             for bar, val in zip(bars, total_var_explained):
@@ -418,18 +441,16 @@ class NormativePCAModel:
                         f'{val*100:.1f}%', ha='center', va='bottom', fontweight='bold')
             
             plt.tight_layout()
-            # Save with event name in filename
-            event_filename = event.replace(" ", "_").replace("/", "_")
-            plt.savefig(os.path.join(results_dir, f"pca_comparison_{event_filename}.png"), dpi=300)
+            plt.savefig(os.path.join(event_dir, f"pca_comparison_{event_filename}.png"), dpi=300)
             plt.close()
             
             print(f"Created comparison plot for {event}")
         
-        # Create overall comparison plot for all event-conditions
+        # Create overall comparison plot (save at pca_models root)
         event_conditions = [r['event_condition'] for r in performance_results]
         total_var_explained_all = [r['total_variance_explained'] for r in performance_results]
         
-        plt.figure(figsize=(18, 8))  # Wide figure for all combinations
+        plt.figure(figsize=(18, 8))
         bars = plt.bar(event_conditions, [v*100 for v in total_var_explained_all])
         plt.ylabel("Total Variance Explained (%)")
         plt.xlabel("Event-Condition Combination")
@@ -442,10 +463,11 @@ class NormativePCAModel:
                     f'{val*100:.1f}%', ha='center', va='bottom', fontsize=8)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(results_dir, "pca_model_comparison_all.png"), dpi=300)
+        plt.savefig(os.path.join(pca_models_dir, "pca_model_comparison_all.png"), dpi=300)
         plt.close()
         
-        # Save detailed comparison CSV grouped by event
+        # Save CSV summaries at pca_models root
+        # Save detailed comparison CSV (grouped by event)
         comparison_data = []
         for event, conditions_data in events_data.items():
             for cd in conditions_data:
@@ -464,7 +486,7 @@ class NormativePCAModel:
                 })
         
         comparison_df = pd.DataFrame(comparison_data)
-        comparison_df.to_csv(os.path.join(results_dir, "pca_model_comparison.csv"), index=False)
+        comparison_df.to_csv(os.path.join(pca_models_dir, "pca_model_comparison.csv"), index=False)
         
         # Create summary table by event
         summary_data = []
@@ -480,9 +502,9 @@ class NormativePCAModel:
             })
         
         summary_df = pd.DataFrame(summary_data)
-        summary_df.to_csv(os.path.join(results_dir, "pca_event_summary.csv"), index=False)
+        summary_df.to_csv(os.path.join(pca_models_dir, "pca_event_summary.csv"), index=False)
         
-        print(f"Model comparison plots and summaries saved to {results_dir}")
+        print(f"Model comparison plots and summaries saved to {pca_models_dir}")
         print(f"Created {len(events_data)} individual event comparison plots")
         
 
