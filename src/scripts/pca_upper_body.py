@@ -101,13 +101,15 @@ class NormativePCAModel:
         return top_features
 
     @staticmethod
-    def load_features_for_event_condition(out_root, datatype, event, condition, participants, return_groups=True):
+    def load_features_for_event_condition(out_root, datatype, event, condition, participants, top_features=None, return_groups=True):
         """
         Load features for a specific event-condition combination by filtering files based on filename.
         Only loads files that contain the specific condition in the filename.
         """
         print(f"Loading features for {event} - {condition}")
         print(f"Participants: {participants}")
+        if top_features is not None:
+            print(f"Loading only top {len(top_features)} features")
         
         all_features = []
         all_labels = []
@@ -138,27 +140,39 @@ class NormativePCAModel:
                 for file in os.listdir(imu_path):
                     if file.endswith('_X.csv'):
                         # Check if this file contains our condition
-                        # Format: P001_Combination_AR_Stair down 1_Head_X.csv
                         if f"_{condition}_" in file:
                             feature_file = os.path.join(imu_path, file)
                             label_file = os.path.join(imu_path, file.replace('_X.csv', '_y.csv'))
                             
                             if os.path.exists(feature_file) and os.path.exists(label_file):
-                                # Load feature data
                                 try:
+                                    # Load feature data
                                     features_df = pd.read_csv(feature_file)
+                                    
+                                    # Filter to only top features if specified
+                                    if top_features is not None:
+                                        # Only keep columns that exist in both the file and top_features list
+                                        available_features = [f for f in top_features if f in features_df.columns]
+                                        if len(available_features) == 0:
+                                            print(f"Warning: No top features found in {file}")
+                                            continue
+                                        features_df = features_df[available_features]
+                                        print(f"Filtered to {len(available_features)} top features in {file}")
+                                    
                                     labels_df = pd.read_csv(label_file)
                                     
                                     # Extract only the 'label' column from labels_df
                                     if 'label' in labels_df.columns:
                                         labels = labels_df['label'].values
                                     else:
-                                        # Fallback: assume the last column is the label
                                         labels = labels_df.iloc[:, -1].values
                                     
                                     # Ensure labels and features have the same length
                                     if len(features_df) != len(labels):
                                         print(f"Warning: Length mismatch in {file}: features={len(features_df)}, labels={len(labels)}")
+                                        min_len = min(len(features_df), len(labels))
+                                        features_df = features_df.iloc[:min_len]
+                                        labels = labels[:min_len]
                                     
                                     # Add to collections
                                     all_features.append(features_df)
@@ -179,6 +193,11 @@ class NormativePCAModel:
         y_combined = np.array(all_labels)
         groups_combined = np.array(all_groups)
         
+        # Handle NaN values by filling with zeros
+        nan_count = X_combined.isna().sum().sum()
+        if nan_count > 0:
+            X_combined = X_combined.fillna(0)
+        
         print(f"Total samples loaded for {event} - {condition}: {len(X_combined)}")
         print(f"Participants in data: {np.unique(groups_combined)}")
         
@@ -188,28 +207,28 @@ class NormativePCAModel:
             return X_combined, y_combined
 
     @staticmethod
-    def load_event_condition_data(out_root, datatype, event_condition, participants, top_features, 
-                                  filter_event_only=True):
+    def load_event_condition_data(out_root, datatype, event_condition, participants, top_features, filter_event_only=False):
         """
-        Load and filter IMU feature data for a specific event-condition combination.
+        Load and filter data for a specific event-condition combination.
         """
         print(f"Loading data for {datatype} - {event_condition}")
         print(f"Participants: {participants}")
         print(f"Number of features to load: {len(top_features)}")
         
-        # Parse event and condition from event_condition
+        # Parse event and condition
         parts = event_condition.split()
-        condition = parts[-1]  # Last part is condition (AR, VR, Normal)
-        event = " ".join(parts[:-1])  # Everything except last part is event name
+        condition = parts[-1]
+        event = " ".join(parts[:-1])
         
-        # Load features filtered by condition
-        X_all, y_all, groups = NormativePCAModel.load_features_for_event_condition(
-            out_root, datatype, event, condition, participants, return_groups=True
+        # Load features with top_features filtering applied during loading
+        X, y, groups = NormativePCAModel.load_features_for_event_condition(
+            out_root, datatype, event, condition, participants, 
+            top_features=top_features, return_groups=True  # Pass top_features here
         )
         
         # Filter to only include the available top features
-        available_features = [f for f in top_features if f in X_all.columns]
-        missing_features = [f for f in top_features if f not in X_all.columns]
+        available_features = [f for f in top_features if f in X.columns]
+        missing_features = [f for f in top_features if f not in X.columns]
         
         if missing_features:
             print(f"Warning: {len(missing_features)} features not found in data:")
@@ -224,20 +243,20 @@ class NormativePCAModel:
         print(f"Using {len(available_features)} out of {len(top_features)} requested features")
         
         # Select only the available top features
-        X_filtered = X_all[available_features].copy()
+        X_filtered = X[available_features].copy()
         
         if filter_event_only:
             # Filter to only keep event windows (label = 1)
-            event_mask = (y_all == 1)
+            event_mask = (y == 1)
             X_filtered = X_filtered[event_mask]
-            y_filtered = y_all[event_mask]
+            y_filtered = y[event_mask]
             groups_filtered = groups[event_mask]
             
             print(f"After filtering for event windows only:")
-            print(f"  Samples: {len(X_filtered)} (from {len(X_all)} total)")
+            print(f"  Samples: {len(X_filtered)} (from {len(X)} total)")
             print(f"  Event windows: {np.sum(y_filtered)} / {len(y_filtered)}")
         else:
-            y_filtered = y_all
+            y_filtered = y
             groups_filtered = groups
         
         print(f"Final data shape: {X_filtered.shape}")
@@ -530,19 +549,13 @@ if __name__ == "__main__":
     # Parameters
     datatype = "IMU"
     n_components = None  # Automatically set to n_participants - 1
-    top_k_features = 10
+    top_k_features = 100
     
     # Get all available event-condition combinations
     available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
     print("Available event-condition combinations:")
     for event_condition, participants in available_data.items():
         print(f"  {event_condition}: {len(participants)} participants")
-    
-    # TEST MODE: Limit to first 2 event-conditions for initial test
-    test_mode = True
-    if test_mode:
-        available_data = dict(list(available_data.items())[:2])
-        print("TEST MODE: Processing only first 2 event-conditions")
     
     # Store performance results for comparison
     performance_results = []
