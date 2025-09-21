@@ -26,10 +26,10 @@ def pick_column_name(df, *candidates):
 
 # Define possible naming conventions for each marker's X coordinate
 marker_cols = {
-    "RASIS": ("R_ASIS_X5", "pelvis:RASIS_X21", "pelvis:RASIS_X26"),
-    "LASIS": ("L_ASIS_X6", "pelvis:LASIS_X22", "pelvis:LASIS_X27"),
-    "RPSIS": ("R_PSIS_X8", "pelvis:RPSIS_X19", "pelvis:RPSIS_X24"),
-    "LPSIS": ("L_PSIS_X7", "pelvis:LPSIS_X20", "pelvis:LPSIS_X25")
+    "RASIS": ("R_ASIS_X5", "R_ASIS_X7", "pelvis:RASIS_X21", "pelvis:RASIS_X26"),
+    "LASIS": ("L_ASIS_X6", "L_ASIS_X8", "pelvis:LASIS_X22", "pelvis:LASIS_X27"),
+    "RPSIS": ("R_PSIS_X8", "R_PSIS_X5", "pelvis:RPSIS_X19", "pelvis:RPSIS_X24"),
+    "LPSIS": ("L_PSIS_X7", "L_PSIS_X6", "pelvis:LPSIS_X20", "pelvis:LPSIS_X25")
 }
 
 # Resolve actual X, Y, Z column names for each marker
