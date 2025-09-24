@@ -483,11 +483,6 @@ class UpperBodyClassifier:
             # Train classifier
             clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
             clf.fit(X_train_fold, y_train_fold)
-            
-            # Save trained model with 10_participants in filename
-            models_dir = os.path.join(results_dir, "trained_models")
-            os.makedirs(models_dir, exist_ok=True)
-
 
             # Evaluate
             y_pred = clf.predict(X_test_fold)
@@ -715,7 +710,7 @@ class UpperBodyClassifier:
         final_clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
         final_clf.fit(X_all, y_all)
         
-        # Save in the main results_dir (models folder) instead of a subfolder
+        # Save trained final model
         final_model_filename = f"{datatype}_{event.replace(' ', '_')}_10_participants_final{file_suffix}_rf_model.pkl"
         final_model_path = os.path.join(results_dir, final_model_filename)
         joblib.dump(final_clf, final_model_path)
