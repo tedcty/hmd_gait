@@ -1,4 +1,6 @@
 import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 import pandas as pd
 import numpy as np
 from enum import Enum
@@ -20,9 +22,7 @@ from trim_events import compute_whole_event_std_global, read_event_labels
 from datetime import datetime
 import re
 import psutil
-import os
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
+import gc
 
 
 class UpperBodyClassifier:
@@ -118,7 +118,7 @@ class UpperBodyClassifier:
         """
         Generate binary labels for event detection based on event type and timing.
         """
-        # Initialize all zeros
+        # Initialise all zeros
         labels = pd.Series(0, index=df.index, name='y')
         
         # Get event type
@@ -415,13 +415,18 @@ class UpperBodyClassifier:
         Perform feature selection using tsfresh statistical tests and Random Forest importance.
         """
         # Select statistically significant features using tsfresh's FeatureSelector transformer
-        selector = FeatureSelector(n_jobs=n_jobs)  # Add n_jobs parameter
-        X_train_sel = selector.fit_transform(X_train, y_train)
+        selector = FeatureSelector(n_jobs=n_jobs)
+        X_train_sel = selector.fit_transform(X_train, y_train)        
         # Fit a RandomForestClassifier on the selected features
-        rf = RandomForestClassifier(n_jobs=n_jobs, random_state=42)  # Also parallelize RF
-        rf.fit(X_train_sel, y_train)
+        rf = RandomForestClassifier(n_jobs=n_jobs, random_state=42)
+        rf.fit(X_train_sel, y_train)        
         # Get feature importances
         importances = pd.Series(rf.feature_importances_, X_train_sel.columns)
+        
+        # Clean up large objects
+        del rf
+        gc.collect()
+        
         return selector, X_train_sel, importances
 
     @staticmethod
@@ -478,13 +483,6 @@ class UpperBodyClassifier:
             # Train classifier
             clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
             clf.fit(X_train_fold, y_train_fold)
-            
-            # Save trained model with 10_participants in filename
-            models_dir = os.path.join(results_dir, "trained_models")
-            os.makedirs(models_dir, exist_ok=True)
-            # model_filename = f"{datatype}_{event.replace(' ', '_')}_10_participants_fold{fold+1}{file_suffix}_rf_model.pkl"
-            # model_path = os.path.join(models_dir, model_filename)
-            # joblib.dump(clf, model_path)
 
             # Evaluate
             y_pred = clf.predict(X_test_fold)
@@ -712,7 +710,7 @@ class UpperBodyClassifier:
         final_clf = RandomForestClassifier(n_jobs=rf_n_jobs, random_state=42)
         final_clf.fit(X_all, y_all)
         
-        # Save in the main results_dir (models folder) instead of a subfolder
+        # Save trained final model
         final_model_filename = f"{datatype}_{event.replace(' ', '_')}_10_participants_final{file_suffix}_rf_model.pkl"
         final_model_path = os.path.join(results_dir, final_model_filename)
         joblib.dump(final_clf, final_model_path)
@@ -728,38 +726,50 @@ class UpperBodyClassifier:
         }
 
     @staticmethod
-    def lopo_feature_selection_and_cv(out_root, datatype, event, results_dir, 
-                                  selector_n_jobs=1, rf_n_jobs=1, k_folds=5, 
-                                  top_k_values=[100, 50, 20, 10], 
-                                  loading_n_jobs=8):
+    def participant_level_feature_selection(out_root, datatype, event, selector_n_jobs=1):
         """
-        Complete pipeline: LOPO feature selection + K-fold CV evaluation for multiple top_k values.
+        Run feature selection on each participant individually to reduce memory usage.
         """
-        os.makedirs(results_dir, exist_ok=True)
-        
-        print(f"Starting LOPO feature selection and CV for {datatype} - {event} (top_k values: {top_k_values})")
-        
-        # Load data ONCE at the beginning
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
         
-        if len(all_pids) < 3:
-            raise ValueError(f"Need at least 3 participants for LOPO feature selection. Found: {len(all_pids)}")
+        participant_features = {}
         
-        print(f"Loading all data for {len(all_pids)} participants...")
-        
-        # Load ALL data at once - shared across all top_k values
-        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
-            out_root, datatype, event, all_pids, return_groups=True, 
-            n_jobs_loading=loading_n_jobs
-        )
-        
-        print(f"Loaded {X_all.shape[0]} samples with {X_all.shape[1]} features")
-        
-        # Run LOPO once and collect all feature importance data
-        logo = LeaveOneGroupOut()
-        all_importance_dicts = []
-        
+        for pid in all_pids:
+            print(f"Feature selection for participant {pid}...")
+            
+            # Load only this participant's data
+            try:
+                X_participant, y_participant = UpperBodyClassifier.load_features_for_participants(
+                    out_root, datatype, event, [pid], return_groups=False
+                )
+                    
+                # Run feature selection on this participant only
+                selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(
+                    X_participant, y_participant, n_jobs=selector_n_jobs
+                )
+                
+                # Store the selected features and importances
+                participant_features[pid] = importances.to_dict()
+                
+                # Explicit cleanup
+                del X_participant, y_participant, selector, X_train_sel, importances
+                gc.collect()  # Force garbage collection
+                
+                print(f"  Selected {len(participant_features[pid])} features")
+                
+            except Exception as e:
+                print(f"Error processing participant {pid}: {e}")
+                continue
+    
+        return participant_features
+
+    @staticmethod
+    def lopo_feature_prevalence_analysis(participant_features, top_k_values=[100, 50, 20, 10]):
+        """
+        Analyse feature prevalence across participants using pre-computed feature selections.
+        """
+        # Apply deduplication to each participant's features
         def get_feature_base_name(feature_name):
             parts = feature_name.split('__')
             cleaned = []
@@ -771,93 +781,101 @@ class UpperBodyClassifier:
                 cleaned.append(p)
             return '__'.join(cleaned)
         
-        print(f"Running LOPO feature selection...")
-        
-        for i, (train_idx, test_idx) in enumerate(logo.split(X_all, y_all, groups)):
-            held_out_participants = list(np.unique(groups[test_idx]))
-            print(f"LOPO iteration {i+1}/{len(all_pids)}: Holding out {held_out_participants}")
-            
-            X_train = X_all.iloc[train_idx]
-            y_train = y_all.iloc[train_idx]
-            
-            selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(
-                X_train, y_train, n_jobs=selector_n_jobs
-            )
-            
-            # Filter duplicates
+        # Deduplicate features for each participant
+        deduplicated_features = {}
+        for pid, features_dict in participant_features.items():
             feature_groups = {}
-            for feature_name, importance in importances.items():
+            for feature_name, importance in features_dict.items():
                 base_name = get_feature_base_name(feature_name)
                 if base_name not in feature_groups or importance > feature_groups[base_name][1]:
                     feature_groups[base_name] = (feature_name, importance)
-            
-            filtered_importances = pd.Series(
-                {original_name: importance for original_name, importance in feature_groups.values()},
-                name=importances.name
-            )
-            
-            all_importance_dicts.append(filtered_importances.to_dict())
-            print(f"  Selected {len(filtered_importances)} features from {len(X_train)} training samples")
-    
-        # Generate top 100 feature sets for each LOPO iteration (always use 100 for the base)
+        
+            deduplicated_features[pid] = {
+                original_name: importance 
+                for original_name, importance in feature_groups.values()
+            }
+        
+        # Generate top 100 feature sets for each participant
         top_100_feature_sets = []
-        for importance_dict in all_importance_dicts:
-            sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+        for pid, features_dict in deduplicated_features.items():
+            sorted_features = sorted(features_dict.items(), key=lambda x: x[1], reverse=True)
             top_100_features = [feature_name for feature_name, _ in sorted_features[:100]]
             top_100_feature_sets.append(set(top_100_features))
         
-        # Calculate prevalence-based combined feature set from top 100s
+        # Calculate prevalence
         feature_prevalence = {}
         for feature_set in top_100_feature_sets:
             for feature in feature_set:
                 feature_prevalence[feature] = feature_prevalence.get(feature, 0) + 1
         
-        def calculate_max_importance(feature_name, importance_dicts):
-            scores = [d.get(feature_name, 0) for d in importance_dicts]
+        # Create master ranking
+        def calculate_max_importance(feature_name, all_features_dict):
+            scores = [d.get(feature_name, 0) for d in all_features_dict.values()]
             return max(scores) if scores else 0
         
-        # Create master feature ranking based on prevalence from top 100s
         master_feature_ranking = []
         for feature, prevalence in feature_prevalence.items():
-            max_importance = calculate_max_importance(feature, all_importance_dicts)
+            max_importance = calculate_max_importance(feature, deduplicated_features)
             master_feature_ranking.append((feature, prevalence, max_importance))
         
         master_feature_ranking.sort(key=lambda x: (x[1], x[2]), reverse=True)
-        print(f"Created master feature ranking with {len(master_feature_ranking)} features from top 100s")
-    
-        # Process each top_k value using the master feature ranking
+        
+        # Generate results for each top_k
         results = {}
-        
-        def calculate_max_importance_from_ranking(feature_name, ranking):
-            for feat, _, importance in ranking:
-                if feat == feature_name:
-                    return importance
-            return 0.0
-        
         for top_k in top_k_values:
-            print(f"\nProcessing top_{top_k} features...")
+            top_k_features = master_feature_ranking[:top_k]
+            prevalence_features = [feature for feature, _, _ in top_k_features]
+            results[f'top_{top_k}'] = prevalence_features 
+        
+        return results, master_feature_ranking
+    
+    @staticmethod
+    def lopo_pipeline(out_root, datatype, event, results_dir, 
+                        selector_n_jobs=1, rf_n_jobs=1, k_folds=5, 
+                        top_k_values=[100, 50, 20, 10], 
+                        loading_n_jobs=8):
+        """
+        Memory-efficient pipeline: participant-level feature selection + prevalence analysis + CV.
+        """        
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # Step 1: Participant-level feature selection
+        print(f"Step 1: Running participant-level feature selection for {datatype} - {event}")
+        participant_features = UpperBodyClassifier.participant_level_feature_selection(
+            out_root, datatype, event, selector_n_jobs
+        )
+        
+        if len(participant_features) < 3:
+            raise ValueError(f"Need at least 3 participants for feature selection. Found: {len(participant_features)}")
+        
+        # Step 2: Prevalence analysis
+        print(f"Step 2: Analysing feature prevalence across participants")
+        top_k_results, master_ranking = UpperBodyClassifier.lopo_feature_prevalence_analysis(
+            participant_features, top_k_values
+        )
+        
+        # Step 3: Load data once for all CV runs
+        print(f"Step 3: Loading data for cross-validation")
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        all_pids = list(participant_features.keys())  # Only participants that had successful feature selection
+        
+        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
+            out_root, datatype, event, all_pids, return_groups=True, 
+            n_jobs_loading=loading_n_jobs
+        )
+        
+        # Step 4: Run CV for each top_k (reusing loaded data)
+        results = {}
+        for top_k in top_k_values:
+            print(f"Step 4: Running {k_folds}-fold CV for top_{top_k}")
             
-            # Create subfolder for this top_k value
             results_dir_topk = os.path.join(results_dir, f"top_{top_k}")
             os.makedirs(results_dir_topk, exist_ok=True)
             
-            # Select top_k from master ranking
-            top_k_prevalent = master_feature_ranking[:top_k]
-            prevalence_features = [feature for feature, _, _ in top_k_prevalent]
+            prevalence_features = top_k_results[f'top_{top_k}']
             
-            prevalence_importances = {
-                feature: calculate_max_importance_from_ranking(feature, master_feature_ranking) 
-                for feature in prevalence_features
-            }
-            
-            # Save results
-            def export_features_json(ef: dict, filepath):
-                with open(filepath, 'w') as outfile:
-                    json.dump(ef, outfile, indent=4)
-            
-            prevalence_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_top{top_k}_features.json")
-            export_features_json(prevalence_importances, prevalence_path)
-            
+            # Save prevalence analysis for this top_k
+            top_k_prevalent = master_ranking[:top_k]
             prevalence_analysis = []
             for feature, prevalence, max_importance in top_k_prevalent:
                 prevalence_analysis.append({
@@ -872,9 +890,14 @@ class UpperBodyClassifier:
             prevalence_analysis_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_analysis.csv")
             prevalence_df.to_csv(prevalence_analysis_path, index=False)
             
-            print(f"Top {top_k} results: {len(prevalence_features)} features -> {prevalence_path}")
+            # Save feature list as JSON
+            prevalence_importances = {
+                feature: max_importance for feature, _, max_importance in top_k_prevalent
+            }
+            prevalence_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_top{top_k}_features.json")
+            with open(prevalence_path, 'w') as outfile:
+                json.dump(prevalence_importances, outfile, indent=4)
             
-            # Run K-fold CV for this top_k
             cv_results = UpperBodyClassifier.k_fold_cross_validation(
                 out_root, datatype, event, results_dir_topk, prevalence_features, 
                 k_folds, rf_n_jobs, top_k=top_k,
@@ -885,7 +908,10 @@ class UpperBodyClassifier:
                 'features': prevalence_features,
                 'cv_results': cv_results
             }
-        
+            
+            # Clean up between iterations
+            gc.collect()
+    
         return results
 
 class UpperBodyKinematics(Enum):
@@ -984,15 +1010,9 @@ if __name__ == "__main__":
                     results_dir = os.path.join(models_root, datatype, ev.replace(" ", "_"))
                     
                     # Run full pipeline for all events
-                    UpperBodyClassifier.lopo_feature_selection_and_cv(
-                        out_root, 
-                        datatype, 
-                        ev, 
-                        results_dir,
-                        selector_n_jobs,
-                        rf_n_jobs,
-                        5,  # k_folds
-                        [100, 50, 20, 10],  # top_k_values
+                    UpperBodyClassifier.lopo_pipeline(
+                        out_root, datatype, ev, results_dir,
+                        selector_n_jobs, rf_n_jobs, 5, [100, 50, 20, 10], 
                         loading_n_jobs=loading_n_jobs
                     )
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
