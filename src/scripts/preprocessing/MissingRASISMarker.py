@@ -24,21 +24,43 @@ def pick_column_name(df, *candidates):
             return c
     raise ValueError(f"None of the columns {candidates} exist in the DataFrame.")
 
-# Define possible naming conventions for each marker's X coordinate
-marker_cols = {
-    "RASIS": ("R_ASIS_X5", "R_ASIS_X7", "pelvis:RASIS_X21", "pelvis:RASIS_X26"),
-    "LASIS": ("L_ASIS_X6", "L_ASIS_X8", "pelvis:LASIS_X22", "pelvis:LASIS_X27"),
-    "RPSIS": ("R_PSIS_X8", "R_PSIS_X5", "pelvis:RPSIS_X19", "pelvis:RPSIS_X24"),
-    "LPSIS": ("L_PSIS_X7", "L_PSIS_X6", "pelvis:LPSIS_X20", "pelvis:LPSIS_X25")
+# Helper to find columns containing marker names
+def find_marker_columns(df, marker_patterns):
+    """
+    Find X, Y, Z columns for a marker based on patterns in column names.
+    Returns tuple of (x_col, y_col, z_col) or raises ValueError if not found.
+    """
+    x_col = None
+    for col in df.columns:
+        if any(pattern.upper() in col.upper() for pattern in marker_patterns) and 'X' in col:
+            x_col = col
+            break
+    
+    if x_col is None:
+        raise ValueError(f"No X column found for patterns: {marker_patterns}")
+    
+    # Generate Y and Z column names based on X column
+    y_col = x_col.replace('X', 'Y')
+    z_col = x_col.replace('X', 'Z')
+    
+    # Verify Y and Z columns exist
+    if y_col not in df.columns or z_col not in df.columns:
+        raise ValueError(f"Y or Z columns not found for marker with X column: {x_col}")
+    
+    return x_col, y_col, z_col
+
+# Define marker search patterns
+marker_patterns = {
+    "RASIS": ["RASIS", "R_ASIS"],
+    "LASIS": ["LASIS", "L_ASIS"],
+    "RPSIS": ["RPSIS", "R_PSIS"],
+    "LPSIS": ["LPSIS", "L_PSIS"]
 }
 
 # Resolve actual X, Y, Z column names for each marker
 cols = {}
-for name, x_candidates in marker_cols.items():
-    x_col = pick_column_name(df, *x_candidates)
-    y_col = x_col.replace("X", "Y")
-    z_col = x_col.replace("X", "Z")
-    cols[name] = (x_col, y_col, z_col)
+for name, patterns in marker_patterns.items():
+    cols[name] = find_marker_columns(df, patterns)
 
 # Identify frames where RASIS is present vs missing
 rasis_x, rasis_y, rasis_z = cols["RASIS"]

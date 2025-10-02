@@ -3,16 +3,14 @@ import numpy as np
 setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 from yatpkg.math.transformation import Cloud
 
+# Configuration - Change these parameters as needed
 participant_id = "P026"  # Replace with the actual participant ID
 session_id = "Obstacle AR 01_Reconstructed"  # Replace with the actual session ID
+target_marker = "LPSIS"  # Change to "RASIS", "LASIS", "RPSIS", or "LPSIS"
 
 # Read in the TRC file
 trc_data = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)  # Add path to specific TRC file
 df = trc_data.to_panda()  # Convert to pandas dataframe
-
-# # Export to CSV
-# output_csv_path = r"C:\Users\vibha\OneDrive\Documents\Masters Project\Data Processing\Reactive Normal 01.csv"
-# df.to_csv(output_csv_path, index=False)
 
 # Helper to pick between alternative column names
 def pick_column_name(df, *candidates):
@@ -57,15 +55,31 @@ marker_patterns = {
     "LPSIS": ["LPSIS", "L_PSIS"]
 }
 
+# Validate target marker
+if target_marker not in marker_patterns:
+    raise ValueError(f"Target marker '{target_marker}' must be one of: {list(marker_patterns.keys())}")
+
 # Resolve actual X, Y, Z column names for each marker
 cols = {}
 for name, patterns in marker_patterns.items():
     cols[name] = find_marker_columns(df, patterns)
 
-# Identify frames where LPSIS is present vs missing
-lpsis_x, lpsis_y, lpsis_z = cols["LPSIS"]
-valid_idxs = df.index[df[lpsis_x].notna()]
-missing_idxs = df.index[df[lpsis_x].isna()]
+# Get the three reference markers (excluding the target marker)
+all_markers = ["RASIS", "LASIS", "RPSIS", "LPSIS"]
+reference_markers = [marker for marker in all_markers if marker != target_marker]
+
+print(f"Reconstructing missing {target_marker} marker using reference markers: {reference_markers}")
+
+# Identify frames where target marker is present vs missing
+target_x, target_y, target_z = cols[target_marker]
+valid_idxs = df.index[df[target_x].notna()]
+missing_idxs = df.index[df[target_x].isna()]
+
+print(f"Found {len(missing_idxs)} missing frames for {target_marker}")
+
+if len(missing_idxs) == 0:
+    print(f"No missing data found for {target_marker}. Exiting.")
+    exit()
 
 # If the missing frames are before the first valid, use first valid; otherwise use last valid
 if missing_idxs.min() < valid_idxs.min():
@@ -75,7 +89,7 @@ else:
 
 calibration_frame = df.loc[calib_idx]
 
-# Extract callibration marker positions
+# Extract calibration marker positions
 calibration_markers = {
     name: [
         calibration_frame[x], 
@@ -85,39 +99,44 @@ calibration_markers = {
     for name, (x, y, z) in cols.items()
 }
 
-# Apply rigid body transformation to the missing LPSIS marker
-
-reconstructed_lpsis = []
+# Apply rigid body transformation to the missing target marker
+reconstructed_positions = []
 
 for idx in missing_idxs:
     row = df.loc[idx]
-    # Extract current marker positions for RASIS, RPSIS and LASIS
+    
+    # Extract current marker positions for the three reference markers
     current_markers = np.array([
-        [row[cols["RASIS"][0]], row[cols["RASIS"][1]], row[cols["RASIS"][2]]],
-        [row[cols["RPSIS"][0]], row[cols["RPSIS"][1]], row[cols["RPSIS"][2]]],
-        [row[cols["LASIS"][0]], row[cols["LASIS"][1]], row[cols["LASIS"][2]]],
+        [row[cols[ref_marker][0]], row[cols[ref_marker][1]], row[cols[ref_marker][2]]]
+        for ref_marker in reference_markers
     ]).T
 
-    # Extract calibration marker positions (excluding LPSIS)
-    calibration_markers_current = np.array([calibration_markers["RASIS"], calibration_markers["RPSIS"], calibration_markers["LASIS"]]).T
+    # Extract calibration marker positions (excluding target marker)
+    calibration_markers_current = np.array([
+        calibration_markers[ref_marker] for ref_marker in reference_markers
+    ]).T
 
     # Compute transformation matrix
     transformation_matrix = Cloud.rigid_body_transform(calibration_markers_current, current_markers, rowpoints=False)
 
-    # Apply transformation to the missing LPSIS marker
-    lpsis_calib = np.array([calibration_markers["LPSIS"] + [1]])
-    lpsis_new = transformation_matrix @ lpsis_calib.T
+    # Apply transformation to the missing target marker
+    target_calib = np.array([calibration_markers[target_marker] + [1]])
+    target_new = transformation_matrix @ target_calib.T
 
-    # Store the reconstructed LPSIS marker
-    reconstructed_lpsis.append(lpsis_new[:3].flatten())  # Take only x, y, z
+    # Store the reconstructed target marker
+    reconstructed_positions.append(target_new[:3].flatten())  # Take only x, y, z
 
-# Add the reconstructed LPSIS marker to the dataframe
-for idx, (x, y, z) in zip(missing_idxs, reconstructed_lpsis):
-    df.loc[idx, [lpsis_x, lpsis_y, lpsis_z]] = [x, y, z]
+# Add the reconstructed target marker to the dataframe
+for idx, (x, y, z) in zip(missing_idxs, reconstructed_positions):
+    df.loc[idx, [target_x, target_y, target_z]] = [x, y, z]
+
+print(f"Successfully reconstructed {len(missing_idxs)} frames for {target_marker}")
 
 # Replace trc_data's data with the updated dataframe
 trc_data.data = df.to_numpy()
-
 trc_data.update()
 
-trc_data.write(fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}_Reconstructed.trc")  # Add path to save the reconstructed TRC file
+# Save the reconstructed TRC file
+output_filename = fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}_Reconstructed.trc"
+trc_data.write(output_filename)
+print(f"Saved reconstructed data to: {output_filename}")
