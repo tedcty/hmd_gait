@@ -2,18 +2,66 @@ from yatpkg.util.data import TRC, Yatsdo
 import numpy as np
 setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 
+# Configuration - Change these parameters as needed
 participant_id = "P021"  # Replace with the actual participant ID
 session_id = "Straight AR 01_Reconstructed"  # Replace with the actual session ID
+source_marker = "RASIS"  # Source marker to use for reconstruction
+target_marker = "LASIS"  # Target marker to reconstruct
 
 # Load TRC (no automatic filling)
 trc = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)
 df  = trc.to_panda()
 
+# Helper to find columns containing marker names
+def find_marker_columns(df, marker_patterns):
+    """
+    Find X, Y, Z columns for a marker based on patterns in column names.
+    Returns tuple of (x_col, y_col, z_col) or raises ValueError if not found.
+    """
+    x_col = None
+    for col in df.columns:
+        if any(pattern.upper() in col.upper() for pattern in marker_patterns) and 'X' in col:
+            x_col = col
+            break
+    
+    if x_col is None:
+        raise ValueError(f"No X column found for patterns: {marker_patterns}")
+    
+    # Generate Y and Z column names based on X column
+    y_col = x_col.replace('X', 'Y')
+    z_col = x_col.replace('X', 'Z')
+    
+    # Verify Y and Z columns exist
+    if y_col not in df.columns or z_col not in df.columns:
+        raise ValueError(f"Y or Z columns not found for marker with X column: {x_col}")
+    
+    return x_col, y_col, z_col
+
+# Define marker search patterns
+marker_patterns = {
+    "RASIS": ["RASIS", "R_ASIS"],
+    "LASIS": ["LASIS", "L_ASIS"],
+    "RPSIS": ["RPSIS", "R_PSIS"],
+    "LPSIS": ["LPSIS", "L_PSIS"]
+}
+
+# Validate markers
+if source_marker not in marker_patterns:
+    raise ValueError(f"Source marker '{source_marker}' must be one of: {list(marker_patterns.keys())}")
+if target_marker not in marker_patterns:
+    raise ValueError(f"Target marker '{target_marker}' must be one of: {list(marker_patterns.keys())}")
+
+# Find source and target columns dynamically
+src_x, src_y, src_z = find_marker_columns(df, marker_patterns[source_marker])
+tgt_x, tgt_y, tgt_z = find_marker_columns(df, marker_patterns[target_marker])
+
 # Identify source and target columns
 time_col = 'Time'
-src_cols = ['R_ASIS_X5', 'R_ASIS_Y5', 'R_ASIS_Z5']
-tgt_cols = ['L_ASIS_X6', 'L_ASIS_Y6', 'L_ASIS_Z6']
-# NOTE: The columns are assumed to be named as per the original TRC file. Adjust if necessary.
+src_cols = [src_x, src_y, src_z]
+tgt_cols = [tgt_x, tgt_y, tgt_z]
+
+print(f"Using source marker {source_marker}: {src_cols}")
+print(f"Reconstructing target marker {target_marker}: {tgt_cols}")
 
 # Find frames where both source and target are visible
 both_ok = df.dropna(subset=src_cols + tgt_cols)
