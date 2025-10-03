@@ -5,29 +5,44 @@ setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 if __name__ == "__main__":
 
     # Configuration - Change these parameters as needed
-    participant_id = "P021"  # Replace with the actual participant ID
-    session_id = "Straight AR 01_Reconstructed"  # Replace with the actual session ID
-    source_marker = "RASIS"  # Source marker to use for reconstruction
-    target_marker = "LASIS"  # Target marker to reconstruct
+    participant_id = "P004"  # Replace with the actual participant ID
+    session_id = "Combination normal 1"  # Replace with the actual session ID
+    source_marker = "R_Radius"  # Source marker to use for reconstruction
+    target_marker = "R_Ulna"  # Target marker to reconstruct
 
     # Load TRC (no automatic filling)
     trc = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)
     df  = trc.to_panda()
 
     # Helper to find columns containing marker names
-    def find_marker_columns(df, marker_patterns):
+    def find_marker_columns(df, marker_name):
         """
-        Find X, Y, Z columns for a marker based on patterns in column names.
+        Find X, Y, Z columns for a marker based on the marker name.
         Returns tuple of (x_col, y_col, z_col) or raises ValueError if not found.
         """
-        x_col = None
+        # Look for exact match first, then partial match
+        possible_x_cols = []
+        
+        # Check for exact matches
         for col in df.columns:
-            if any(pattern.upper() in col.upper() for pattern in marker_patterns) and 'X' in col:
+            if marker_name.upper() in col.upper() and 'X' in col:
+                possible_x_cols.append(col)
+        
+        if not possible_x_cols:
+            raise ValueError(f"No X column found for marker: {marker_name}. Available columns: {list(df.columns)}")
+        
+        # If multiple matches, prefer exact match
+        x_col = None
+        for col in possible_x_cols:
+            # Remove common suffixes and check for exact match
+            col_base = col.replace('_X', '').replace('X', '')
+            if col_base.upper() == marker_name.upper():
                 x_col = col
                 break
         
+        # If no exact match, take the first one
         if x_col is None:
-            raise ValueError(f"No X column found for patterns: {marker_patterns}")
+            x_col = possible_x_cols[0]
         
         # Generate Y and Z column names based on X column
         y_col = x_col.replace('X', 'Y')
@@ -39,23 +54,26 @@ if __name__ == "__main__":
         
         return x_col, y_col, z_col
 
-    # Define marker search patterns
-    marker_patterns = {
-        "RASIS": ["RASIS", "R_ASIS"],
-        "LASIS": ["LASIS", "L_ASIS"],
-        "RPSIS": ["RPSIS", "R_PSIS"],
-        "LPSIS": ["LPSIS", "L_PSIS"]
-    }
-
-    # Validate markers
-    if source_marker not in marker_patterns:
-        raise ValueError(f"Source marker '{source_marker}' must be one of: {list(marker_patterns.keys())}")
-    if target_marker not in marker_patterns:
-        raise ValueError(f"Target marker '{target_marker}' must be one of: {list(marker_patterns.keys())}")
-
     # Find source and target columns dynamically
-    src_x, src_y, src_z = find_marker_columns(df, marker_patterns[source_marker])
-    tgt_x, tgt_y, tgt_z = find_marker_columns(df, marker_patterns[target_marker])
+    try:
+        src_x, src_y, src_z = find_marker_columns(df, source_marker)
+    except ValueError as e:
+        print(f"Error finding source marker '{source_marker}': {e}")
+        # Print available marker names to help debugging
+        marker_names = set()
+        for col in df.columns:
+            if any(suffix in col for suffix in ['_X', '_Y', '_Z', 'X', 'Y', 'Z']):
+                base_name = col.replace('_X', '').replace('_Y', '').replace('_Z', '').replace('X', '').replace('Y', '').replace('Z', '')
+                if base_name:
+                    marker_names.add(base_name)
+        print(f"Available marker names: {sorted(marker_names)}")
+        raise
+
+    try:
+        tgt_x, tgt_y, tgt_z = find_marker_columns(df, target_marker)
+    except ValueError as e:
+        print(f"Error finding target marker '{target_marker}': {e}")
+        raise
 
     # Identify source and target columns
     time_col = 'Time'
@@ -101,6 +119,7 @@ if __name__ == "__main__":
     # Find the times where the target is missing
     missing_mask = df[tgt_cols[0]].isna()
     if not missing_mask.any():
+        print("No missing data found for target marker.")
         # Nothing to fill; still write out a clean copy if you want
         trc.data = df.to_numpy()
         trc.update()
@@ -133,3 +152,4 @@ if __name__ == "__main__":
         trc.data = df.to_numpy()
         trc.update()
         trc.write(fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}_Reconstructed.trc")
+        print(f"Output saved to: Z:\\Upper Body\\Mocap\\{participant_id}\\{session_id}_Reconstructed.trc")
