@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from ptb.util.gait.helpers import OsimHelper
 from ptb.util.io.mocap.file_formats import TRC
+from ptb.util.data import StorageIO
 
 import copy
 import os
@@ -51,11 +52,44 @@ class Param:
         except ValueError:
             return "NA"
 
+    xsens = {
+        "Marker": ["LPSH", "RPSH", "LUA3", "RUA3", "LFAsuperior", "RFAsuperior", "Sacrum", "CLAV", "LTH1", "RTH1",
+                   "LTB3", "RTB3", "LMT5", "RMT5"],
+        "IMU": ["LeftShoulder", "RightShoulder", "LeftUpperArm", "RightUpperArm", "LeftForeArm", "RightForeArm",
+                "Pelvis", "T8", "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg", "LeftFoot",
+                "RightFoot"]
+    }
+
+
+def create_trc_file():
+    test = "M:/Mocap/Movella_Re/P025/Straight Normal 01/LeftForeArm_imu_vec3_2.csv"
+    est = "M:/Mocap/Movella_Re/P025/Straight Normal 01/"
+    e = [f for f in os.listdir(est) if f.split('_')[0] in Param.xsens['IMU']]
+    tilename = "M:/Mocap/Movella_Re/P025/Straight Normal 01_imu.trc"
+    imu = os.path.split(test)[1].split("_")[0]
+    imu_idx = Param.xsens['IMU'].index(imu)
+    marker = Param.xsens['Marker'][imu_idx]
+    df = pd.read_csv(test)
+    pos = ['m_position_X', 'm_position_Y', 'm_position_Z']
+    timex = ['time']
+    idx = 1
+    pos_df = df[pos]
+    time_series = df[timex]
+    time_series = time_series - time_series.iloc[0, 0]
+    npdf = np.zeros([time_series.shape[0], 5])
+    npdf[:, 1] = time_series.to_numpy()[:, 0]
+    npdf[:, 2:] = pos_df.to_numpy()
+    npdf[:, 0] = [i + 1 for i in range(0, time_series.shape[0])]
+    cols = ['Frame', 'Time', '{0}_X{1}'.format(marker, idx), '{0}_Y{1}'.format(marker, idx),
+            '{0}_Z{1}'.format(marker, idx)]
+    df_markers = pd.DataFrame(data=npdf, columns=cols)
+    trc = TRC.create_from_panda_dataframe(df_markers, tilename)
+
 
 if __name__ == '__main__':
     skips = {}
     # skips = {"P025_Combination_Normal_T1", "P025_Free_VR_T2", "P025_Straight_AR_T2", "P025_Reactive_AR_T1"}
-    particpant = 'P020'
+    particpant = 'P018'
     out_dir = 'I:/Meta/metaik/{0}/'.format(particpant)
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -84,15 +118,9 @@ if __name__ == '__main__':
         print(trial_folder)
         if not os.path.exists(trial_folder):
             os.makedirs(trial_folder)
-        try:
-            trc = TRC.create_from_c3d("{0}{1}/{2}".format(pfile, session[0], f))
-        except ValueError:
-            continue
+        trc = TRC.create_from_c3d("{0}{1}/{2}".format(pfile, session[0], f))
         print("Reorient markers")
-        try:
-            trc.z_up_to_y_up()
-        except ValueError:
-            continue
+        trc.z_up_to_y_up()
         n0 = [m for m in trc.marker_set if particpant in m]
         if len(n0) == 0:
             n0 = [m for m in trc.marker_set]
@@ -113,8 +141,6 @@ if __name__ == '__main__':
             trc.marker_set = {m: trc.marker_set[m] for m in n}
 
         mpx = [m for m in trc.marker_set]
-        if len(mpx) == 0:
-            continue
         print("Check for last empty column")
         if np.sum(np.isnan(trc.marker_set[mpx[-1]].iloc[0, :])) > 0:
             m0 = mpx[-1]
