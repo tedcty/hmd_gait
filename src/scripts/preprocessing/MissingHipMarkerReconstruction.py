@@ -1,7 +1,7 @@
-from yatpkg.util.data import TRC
+from ptb.util.data import TRC
 import numpy as np
 setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
-from yatpkg.math.transformation import Cloud
+from ptb.util.math.transformation import Cloud
 
 
 if __name__ == "__main__":
