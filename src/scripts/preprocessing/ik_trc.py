@@ -69,7 +69,7 @@ if __name__ == "__main__":
                 ik.set_output_motion_file(bf)
 
                 trc = TRC.read(trc_file)
-                x = trc[:, 1]  # get time column
+                x = trc.data[:, 1]  # get time column
                 ik.setStartTime(x[0])  # set start time
                 ik.setEndTime(x[-1])  # set end time
 
