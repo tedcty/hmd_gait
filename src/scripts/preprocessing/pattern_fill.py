@@ -5,10 +5,10 @@ setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 if __name__ == "__main__":
 
     # Configuration - Change these parameters as needed
-    participant_id = "P004"  # Replace with the actual participant ID
-    session_id = "Combination normal 1"  # Replace with the actual session ID
-    source_marker = "R_Radius"  # Source marker to use for reconstruction
-    target_marker = "R_Ulna"  # Target marker to reconstruct
+    participant_id = "P030"  # Replace with the actual participant ID
+    session_id = "Defined AR 01"  # Replace with the actual session ID
+    source_marker = "Sternum"  # Source marker to use for reconstruction
+    target_marker = "Head"  # Target marker to reconstruct
 
     # Load TRC (no automatic filling)
     trc = TRC.read(filename=fr"Z:\Upper Body\Mocap\{participant_id}\{session_id}.trc", delimiter="\t", headers=True, fill_data=False)
