@@ -58,8 +58,12 @@ if __name__ == "__main__":
                 ik.setModel(model)
             b = ik.get_output_motion_file()
             
+            # Create output directory for participant if it doesn't exist
+            participant_out_dir = os.path.join(out_dir, p_id)
+            os.makedirs(participant_out_dir, exist_ok=True)
+            
             # Output filename uses the base name (without _Reconstructed)
-            bf = os.path.join(out_dir, p_id, base_filename.replace(".trc", ".mot"))
+            bf = os.path.join(participant_out_dir, base_filename.replace(".trc", ".mot"))
             ik.set_output_motion_file(bf)
 
             trc = TRC.read(trc_file)
