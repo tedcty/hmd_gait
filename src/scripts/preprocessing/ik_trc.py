@@ -52,11 +52,9 @@ if __name__ == "__main__":
             trc_file = os.path.join(root, actual_filename)
             model = os.path.join(osim_dir, f"{p_id}.osim")
             
-            # Set marker file
+            # Set marker and model files
             ik.set_marker_file(trc_file)
-            if model is None:
-                ik.setModel(model)
-            b = ik.get_output_motion_file()
+            ik.set_model_file(model)
             
             # Create output directory for participant if it doesn't exist
             participant_out_dir = os.path.join(out_dir, p_id)
