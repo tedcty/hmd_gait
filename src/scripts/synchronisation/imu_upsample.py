@@ -6,6 +6,8 @@ import numpy as np
 
 skipped_files = []
 
+excluded_participants = ["P001" ,"P010", "P011", "P012", "P014", "P016", "P017", "P019", "P026", "P043"]
+
 def upsample_csv(input_path, output_path, orig_freq=60, target_freq=100):
     df = pd.read_csv(input_path)
     time_col = 'time' if 'time' in df.columns else df.columns[0]
@@ -40,6 +42,20 @@ def upsample_csv(input_path, output_path, orig_freq=60, target_freq=100):
 def upsample_all_csvs(root_folder, orig_freq=60, target_freq=100):
     for csv_file in glob.glob(os.path.join(root_folder, '**', '*.csv'), recursive=True):
         if not csv_file.endswith('.sto.csv'):
+            # Extract participant ID from the file path
+            path_parts = csv_file.split(os.sep)
+            participant_id = None
+            
+            # Look for participant folder pattern (e.g., P001, P010, etc.)
+            for part in path_parts:
+                if part.startswith('P') and len(part) == 4 and part[1:].isdigit():
+                    participant_id = part
+                    break
+            
+            # Skip if participant is in excluded list
+            if participant_id in excluded_participants:
+                continue
+                
             print(f"Upsampling {csv_file}")
             upsample_csv(csv_file, csv_file, orig_freq, target_freq)
 
