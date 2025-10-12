@@ -5,14 +5,21 @@ import matplotlib.pyplot as plt
 from ptb.util.math.filters import Butterworth
 
 if __name__ == '__main__':
-    participant_id = 'P043' # NOTE: Replace with the actual participant ID
-    session_id = 'straight VR 1' # NOTE: Replace with the actual session ID
+    participant_id = 'P003' # NOTE: Replace with the actual participant ID
+    session_id = 'Stairs VR 1' # NOTE: Replace with the actual session ID
+    limb = 'L'  # 'L' for left arm, 'R' for right arm
+
+    if limb == 'L':
+        arm_sensor = 'LeftUpperArm'
+        arm_kinematic = 'arm_add_l'
+    elif limb == 'R':
+        arm_sensor = 'RightUpperArm'
+        arm_kinematic = 'arm_add_r'
 
     # Read both IMUs and kinematic data
-    # NOTE: Change to left leg if needed
-    time1, rolls1, pitches1, yaws1 = read_euler_angles('LeftUpperArm', participant_id, session_id)
+    time1, rolls1, pitches1, yaws1 = read_euler_angles(arm_sensor, participant_id, session_id)
     time2, rolls2, pitches2, yaws2 = read_euler_angles('T8', participant_id, session_id)  # sternum
-    time_kin, arm_add_angles = read_kinematic_data('arm_add_l', participant_id, session_id)
+    time_kin, arm_add_angles = read_kinematic_data(arm_kinematic, participant_id, session_id)
 
     # Ensure both IMU arrays are the same length
     min_len = min(len(time1), len(time2))
@@ -45,8 +52,8 @@ if __name__ == '__main__':
         print("Exiting. Inspect plots and rerun.")
         exit()
 
-    h_imu = np.max(np.abs(pitch_diff)) * 0.6  # Threshold for IMU pitch difference
-    h_kin = np.max(np.abs(arm_add_angles)) * 0.6  # Threshold for kinematic arm adduction angle
+    h_imu = np.max(np.abs(pitch_diff)) * 0.3  # Threshold for IMU pitch difference
+    h_kin = np.max(np.abs(arm_add_angles)) * 0.3  # Threshold for kinematic arm adduction angle
     
     # Find peaks from arm raise during T-pose at the start and end of the session
     peaks_imu, _ = find_peaks(-pitch_diff, height=h_imu, distance=10)

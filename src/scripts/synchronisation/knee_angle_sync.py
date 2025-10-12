@@ -5,14 +5,23 @@ import matplotlib.pyplot as plt
 from ptb.util.math.filters import Butterworth
 
 if __name__ == '__main__':
-    participant_id = 'P043' # NOTE: Replace with the actual participant ID
-    session_id = 'straight VR 1' # NOTE: Replace with the actual session ID
+    participant_id = 'P003' # NOTE: Replace with the actual participant ID
+    session_id = 'Stairs VR 1' # NOTE: Replace with the actual session ID
+    limb = 'L'  # 'L' for left leg, 'R' for right leg
+    
+    if limb == 'L':
+        lower_leg_sensor = 'LeftLowerLeg'
+        upper_leg_sensor = 'LeftUpperLeg'
+        knee_kinematic = 'knee_angle_l'
+    elif limb == 'R':
+        lower_leg_sensor = 'RightLowerLeg'
+        upper_leg_sensor = 'RightUpperLeg'
+        knee_kinematic = 'knee_angle_r'
 
     # Read both IMUs and kinematic data
-    # NOTE: Change to left leg if needed
-    time1, rolls1, pitches1, yaws1 = read_euler_angles('LeftLowerLeg', participant_id, session_id)
-    time2, rolls2, pitches2, yaws2 = read_euler_angles('LeftUpperLeg', participant_id, session_id)
-    time_kin, knee_angles = read_kinematic_data('knee_angle_l', participant_id, session_id)
+    time1, rolls1, pitches1, yaws1 = read_euler_angles(lower_leg_sensor, participant_id, session_id)
+    time2, rolls2, pitches2, yaws2 = read_euler_angles(upper_leg_sensor, participant_id, session_id)
+    time_kin, knee_angles = read_kinematic_data(knee_kinematic, participant_id, session_id)
 
     # Ensure both IMU arrays are the same length
     min_len = min(len(time1), len(time2))
