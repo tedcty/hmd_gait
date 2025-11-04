@@ -956,23 +956,21 @@ if __name__ == "__main__":
 
     total_cores = multiprocessing.cpu_count()
     print(f"Total available cores: {total_cores}")
+    half_cores = max(1, total_cores // 2)
+    print(f"Using half of available cores: {half_cores}")
     
     if RUN_EXTRACT:
         # For extraction: parallel events with cores for tsfresh
-        events_n_jobs = 2
-        tsfresh_n_jobs = max(1, (total_cores - 2) // events_n_jobs)
+        events_n_jobs = min(2, half_cores)
+        tsfresh_n_jobs = max(1, half_cores // events_n_jobs)
         print(f"Extraction: {events_n_jobs} events in parallel, {tsfresh_n_jobs} cores per tsfresh")
     
     if RUN_SELECT_AND_TRAIN:
         # For selection and training
-        total_cores = multiprocessing.cpu_count()
-        system_cores = 2  # Reserve for system
-        loading_n_jobs = min(16, total_cores - system_cores)
-        
-        cpu_cores = total_cores - system_cores
-        selector_n_jobs = cpu_cores
-        rf_n_jobs = cpu_cores
-        
+        loading_n_jobs = min(16, half_cores)
+        selector_n_jobs = half_cores
+        rf_n_jobs = half_cores
+
         print(f"Sequential core allocation:")
         print(f"  Loading: {loading_n_jobs} cores (I/O bound)")
         print(f"  Feature selection: {selector_n_jobs} cores (CPU intensive)")
