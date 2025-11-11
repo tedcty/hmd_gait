@@ -943,8 +943,7 @@ if __name__ == "__main__":
     datatypes = ["IMU"]
 
     # Get all event names from the enum
-    events_all = list(EventWindowSize.events.value.keys())
-    events = [e for e in events_all if e.lower() not in ["dribbling basketball", "pick up basketball"]]  # Excluded events
+    events = list(EventWindowSize.events.value.keys())
 
     out_root = "/hpc/vlee669/Results/30 Participants/features"
     models_root = "/hpc/vlee669/Results/30 Participants/models"
@@ -985,7 +984,7 @@ if __name__ == "__main__":
         f.write(f"Run start: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
 
     # Load event labels once at the start
-    events_dict = read_event_labels("Z:/Upper Body/Event labels.xlsx")
+    events_dict = read_event_labels("/hpc/vlee669/Event labels.xlsx")
 
     try:
         # Extract
