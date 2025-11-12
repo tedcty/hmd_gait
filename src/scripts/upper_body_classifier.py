@@ -23,6 +23,7 @@ from datetime import datetime
 import re
 import psutil
 import gc
+from tqdm import tqdm
 
 
 class UpperBodyClassifier:
@@ -371,9 +372,9 @@ class UpperBodyClassifier:
         print(f"Loading {len(file_list)} files in parallel with {n_jobs_loading} workers...")
         load_start = pd.Timestamp.now()
         
-        results = Parallel(n_jobs=n_jobs_loading, prefer="threads")(
+        results = Parallel(n_jobs=n_jobs_loading, prefer="processes")(
             delayed(load_single_file)(pid, Xp, Yp, all_cols) 
-            for pid, Xp, Yp in file_list
+            for pid, Xp, Yp in tqdm(file_list, desc="Loading files", unit="file")
         )
         
         # Filter out failed loads and separate results
