@@ -411,6 +411,94 @@ class UpperBodyClassifier:
             return X_all, y_all
 
     @staticmethod
+    def load_features_for_participants_selective(out_root, datatype, event, participants, selected_features, return_groups=False, n_jobs_loading=8):
+        """
+        Load only specific features from participants (memory efficient).
+        """
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        
+        print(f"Scanning files for {len(selected_features)} selected features...")
+        file_list = []
+        
+        for pid in participants:
+            pid_path = os.path.join(base, pid)
+            if not os.path.isdir(pid_path):
+                continue
+            for sensor in os.listdir(pid_path):
+                sensor_path = os.path.join(pid_path, sensor)
+                if not os.path.isdir(sensor_path):
+                    continue
+                for fname in os.listdir(sensor_path):
+                    if fname.endswith("_X.csv"):
+                        stem = fname[:-6]
+                        Xp = os.path.join(sensor_path, f"{stem}_X.csv")
+                        Yp = os.path.join(sensor_path, f"{stem}_y.csv")
+                        if os.path.exists(Yp):
+                            file_list.append((pid, Xp, Yp))
+    
+        if not file_list:
+            raise RuntimeError("No CSV features found for given participants.")
+        
+        # Data loading with only selected columns
+        def load_single_file_selective(pid, Xp, Yp, selected_features):
+            """Helper function to load only selected features"""
+            try:
+                # Read only selected columns (much faster and less memory)
+                X_df = pd.read_csv(Xp, index_col="window_id", usecols=["window_id"] + selected_features)
+                
+                # Convert to float32
+                for col in X_df.columns:
+                    X_df[col] = pd.to_numeric(X_df[col], errors='coerce').astype(np.float32)
+                
+                y_df = pd.read_csv(Yp, index_col="window_id")
+                y_sr = y_df.iloc[:, 0].astype(np.int8)
+                
+                # Align indices
+                common_idx = X_df.index.intersection(y_sr.index)
+                if len(common_idx) == 0:
+                    return None, None, None
+                    
+                X_df = X_df.loc[common_idx]
+                y_sr = y_sr.loc[common_idx]
+                
+                groups_data = [pid] * len(X_df)
+                
+                return X_df, y_sr, groups_data
+            except Exception as e:
+                print(f"Error loading {Xp}: {e}")
+                return None, None, None
+    
+        # Parallel file loading
+        print(f"Loading {len(file_list)} files with {len(selected_features)} features each...")
+        load_start = pd.Timestamp.now()
+        
+        results = Parallel(n_jobs=n_jobs_loading, prefer="processes")(
+            delayed(load_single_file_selective)(pid, Xp, Yp, selected_features) 
+            for pid, Xp, Yp in tqdm(file_list, desc="Loading files", unit="file")
+        )
+        
+        # Filter and concatenate
+        X_list, y_list, groups_list = [], [], []
+        for X_df, y_sr, groups_data in results:
+            if X_df is not None:
+                X_list.append(X_df)
+                y_list.append(y_sr)
+                if return_groups:
+                    groups_list.extend(groups_data)
+        
+        load_time = (pd.Timestamp.now() - load_start).total_seconds()
+        print(f"Loading completed in {load_time:.1f}s")
+        
+        X_all = pd.concat(X_list, axis=0)
+        y_all = pd.concat(y_list, axis=0).astype(np.int8)
+        
+        if return_groups:
+            groups = np.array(groups_list)
+            return X_all, y_all, groups
+        else:
+            return X_all, y_all
+
+    @staticmethod
     def feature_selection(X_train, y_train, n_jobs=1):
         """
         Perform feature selection using tsfresh statistical tests and Random Forest importance.
@@ -439,16 +527,19 @@ class UpperBodyClassifier:
             # Use preloaded data
             X_all, y_all, groups = preloaded_data
             print(f"Using preloaded data: {X_all.shape}")
+            # Restrict to combined features
+            X_all = X_all.reindex(columns=combined_features, fill_value=np.float32(0.0))
         else:
+            # Load only the specific features needed
             base = os.path.join(out_root, datatype, event.replace(" ", "_"))
             all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
-            X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
-                out_root, datatype, event, all_pids, return_groups=True
+            
+            print(f"Loading data with only {len(combined_features)} selected features...")
+            X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants_selective(
+                out_root, datatype, event, all_pids, combined_features, return_groups=True
             )
-        
-        # Restrict to combined features
-        X_all = X_all.reindex(columns=combined_features, fill_value=np.float32(0.0))
-        
+            print(f"Loaded data: {X_all.shape}")
+    
         # Participant-based K-fold cross-validation
         gkf = GroupKFold(n_splits=k)
         
@@ -832,9 +923,9 @@ class UpperBodyClassifier:
     
     @staticmethod
     def lopo_pipeline(out_root, datatype, event, results_dir, 
-                        selector_n_jobs=1, rf_n_jobs=1, k_folds=5, 
-                        top_k_values=[100, 50, 20, 10], 
-                        loading_n_jobs=8):
+                    selector_n_jobs=1, rf_n_jobs=1, k_folds=5, 
+                    top_k_values=[100, 50, 20, 10], 
+                    loading_n_jobs=8):
         """
         Memory-efficient pipeline: participant-level feature selection + prevalence analysis + CV.
         """        
@@ -855,17 +946,11 @@ class UpperBodyClassifier:
             participant_features, top_k_values
         )
         
-        # Step 3: Load data once for all CV runs
-        print(f"Step 3: Loading data for cross-validation")
+        # NEW: Don't load data here, load per top_k instead
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
-        all_pids = list(participant_features.keys())  # Only participants that had successful feature selection
+        all_pids = list(participant_features.keys())
         
-        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants(
-            out_root, datatype, event, all_pids, return_groups=True, 
-            n_jobs_loading=loading_n_jobs
-        )
-        
-        # Step 4: Run CV for each top_k (reusing loaded data)
+        # Step 4: Run CV for each top_k (load data per iteration with only needed features)
         results = {}
         for top_k in top_k_values:
             print(f"Step 4: Running {k_folds}-fold CV for top_{top_k}")
@@ -899,10 +984,11 @@ class UpperBodyClassifier:
             with open(prevalence_path, 'w') as outfile:
                 json.dump(prevalence_importances, outfile, indent=4)
             
+            # Pass None for preloaded_data, let k_fold_cross_validation load only what it needs
             cv_results = UpperBodyClassifier.k_fold_cross_validation(
                 out_root, datatype, event, results_dir_topk, prevalence_features, 
                 k_folds, rf_n_jobs, top_k=top_k,
-                preloaded_data=(X_all, y_all, groups)
+                preloaded_data=None  # Don't preload, load per top_k
             )
             
             results[f'top_{top_k}'] = {
@@ -912,7 +998,7 @@ class UpperBodyClassifier:
             
             # Clean up between iterations
             gc.collect()
-    
+
         return results
 
 class UpperBodyKinematics(Enum):
@@ -969,7 +1055,7 @@ if __name__ == "__main__":
         # For selection and training
         loading_n_jobs = min(16, half_cores)
         selector_n_jobs = half_cores
-        rf_n_jobs = half_cores
+        rf_n_jobs = 16
 
         print(f"Sequential core allocation:")
         print(f"  Loading: {loading_n_jobs} cores (I/O bound)")
