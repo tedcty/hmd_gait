@@ -441,32 +441,39 @@ class UpperBodyClassifier:
         
         # Data loading with only selected columns
         def load_single_file_selective(pid, Xp, Yp, selected_features):
-            """Helper function to load only selected features"""
+            """Helper: load only selected features, tolerating missing columns per file."""
             try:
-                # Read only selected columns (much faster and less memory)
-                X_df = pd.read_csv(Xp, index_col="window_id", usecols=["window_id"] + selected_features)
-                
-                # Convert to float32
-                for col in X_df.columns:
-                    X_df[col] = pd.to_numeric(X_df[col], errors='coerce').astype(np.float32)
-                
+                # 1) Read header to discover available columns
+                header = pd.read_csv(Xp, nrows=0, index_col="window_id")
+                available = set(header.columns)  # includes "window_id"
+                present_feats = [c for c in selected_features if c in available]
+
+                # Always include index column; read only what exists in this file
+                usecols = ["window_id"] + present_feats
+                X_df = pd.read_csv(Xp, index_col="window_id", usecols=usecols)
+
+                # Convert present columns to float32
+                X_df = X_df.astype(np.float32, errors='ignore')
+
+                # 2) Align y and X on common indices
                 y_df = pd.read_csv(Yp, index_col="window_id")
                 y_sr = y_df.iloc[:, 0].astype(np.int8)
-                
-                # Align indices
                 common_idx = X_df.index.intersection(y_sr.index)
                 if len(common_idx) == 0:
                     return None, None, None
-                    
                 X_df = X_df.loc[common_idx]
                 y_sr = y_sr.loc[common_idx]
-                
+
+                # 3) Reindex to full selected feature set (fill missing with 0.0)
+                X_df = X_df.reindex(columns=selected_features, fill_value=np.float32(0.0))
+
                 groups_data = [pid] * len(X_df)
-                
                 return X_df, y_sr, groups_data
+
             except Exception as e:
                 print(f"Error loading {Xp}: {e}")
                 return None, None, None
+
     
         # Parallel file loading
         print(f"Loading {len(file_list)} files with {len(selected_features)} features each...")
@@ -946,7 +953,8 @@ class UpperBodyClassifier:
             participant_features, top_k_values
         )
         
-        # NEW: Don't load data here, load per top_k instead
+        # Step 3: Load per top_k data as needed
+        print(f"Step 3: Data will be loaded selectively for each top_k evaluation")
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         all_pids = list(participant_features.keys())
         
@@ -1099,6 +1107,12 @@ if __name__ == "__main__":
                         selector_n_jobs, rf_n_jobs, 5, [100, 50, 20, 10], 
                         loading_n_jobs=loading_n_jobs
                     )
+                    
+                    # Force cleanup between events
+                    gc.collect()
+                    import time
+                    time.sleep(2)
+                    print(f"Completed event: {ev}\n")
                 write_status(status_file, f"[SELECT+TRAIN] {datatype} END")
 
         write_status(status_file, f"Run success: {datetime.now():%Y-%m-%d %H:%M:%S}")
