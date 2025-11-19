@@ -1,9 +1,10 @@
 import os
 import json
 import pandas as pd
-import numpy as np, csv, json
+import numpy as np
 import matplotlib.pyplot as plt
 from gias3.learning.PCA import PCA
+import traceback
 
 
 class NormativePCAModel:
@@ -66,9 +67,52 @@ class NormativePCAModel:
         return event_conditions
 
     @staticmethod
-    def load_top_features(results_dir, datatype, event_condition, top_k=10):
+    def get_cv_folds(participants, k=5, folds_json_path=None):
         """
-        Load the top k features from the prevalence-based feature selection results.
+        Get k-fold cross-validation splits for participants.
+        
+        If folds_json_path is provided and exists, load pre-defined folds from JSON.
+        """
+        if folds_json_path and os.path.exists(folds_json_path):
+            print(f"Loading CV folds from {folds_json_path}")
+            with open(folds_json_path, 'r') as f:
+                folds_dict = json.load(f)
+            
+            # Convert to expected format
+            folds = []
+            all_participants = set(participants)
+            for fold_name in sorted(folds_dict.keys()):
+                test_participants = [p for p in folds_dict[fold_name] if p in all_participants]
+                train_participants = [p for p in all_participants if p not in test_participants]
+                folds.append({
+                    'train': train_participants,
+                    'test': test_participants
+                })
+            
+            print(f"Loaded {len(folds)} folds from JSON")
+            return folds
+        
+        # Deterministic round-robin split
+        print(f"Creating deterministic {k}-fold split")
+        sorted_participants = sorted(participants)
+        folds = [{'train': [], 'test': []} for _ in range(k)]
+        
+        # Assign participants to folds round-robin
+        for i, participant in enumerate(sorted_participants):
+            fold_idx = i % k
+            folds[fold_idx]['test'].append(participant)
+        
+        # Fill in training sets (all participants except test)
+        for i in range(k):
+            test_set = set(folds[i]['test'])
+            folds[i]['train'] = [p for p in sorted_participants if p not in test_set]
+        
+        return folds
+
+    @staticmethod
+    def load_top_features(results_dir, datatype, event_condition, top_k=100):
+        """
+        Load the top 100 features from the prevalence-based feature selection results.
         """
         # Parse event and condition from event_condition
         parts = event_condition.split()
@@ -93,11 +137,11 @@ class NormativePCAModel:
         with open(feature_file, 'r') as f:
             features_dict = json.load(f)
         
-        # Sort features by importance (descending) and take top k
+        # Sort features by importance (descending) and take top 100
         sorted_features = sorted(features_dict.items(), key=lambda x: x[1], reverse=True)
-        top_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
+        top_features = [feature_name for feature_name, _ in sorted_features[:100]]
         
-        print(f"Loaded top {len(top_features)} features for {datatype} - {event_condition}")
+        print(f"Loaded top 100 features for {datatype} - {event_condition}")
         return top_features
 
     @staticmethod
@@ -109,7 +153,7 @@ class NormativePCAModel:
         print(f"Loading features for {event} - {condition}")
         print(f"Participants: {participants}")
         if top_features is not None:
-            print(f"Loading only top {len(top_features)} features")
+            print(f"Loading only top 100 features")
         
         all_features = []
         all_labels = []
@@ -157,7 +201,6 @@ class NormativePCAModel:
                                             print(f"Warning: No top features found in {file}")
                                             continue
                                         features_df = features_df[available_features]
-                                        print(f"Filtered to {len(available_features)} top features in {file}")
                                     
                                     labels_df = pd.read_csv(label_file)
                                     
@@ -178,8 +221,6 @@ class NormativePCAModel:
                                     all_features.append(features_df)
                                     all_labels.extend(labels)
                                     all_groups.extend([participant] * len(features_df))
-                                    
-                                    print(f"Loaded: {file} ({len(features_df)} samples)")
                                     
                                 except Exception as e:
                                     print(f"Error loading {feature_file}: {e}")
@@ -223,7 +264,7 @@ class NormativePCAModel:
         # Load features with top_features filtering applied during loading
         X, y, groups = NormativePCAModel.load_features_for_event_condition(
             out_root, datatype, event, condition, participants, 
-            top_features=top_features, return_groups=True  # Pass top_features here
+            top_features=top_features, return_groups=True
         )
         
         # Filter to only include the available top features
@@ -265,278 +306,270 @@ class NormativePCAModel:
         return X_filtered, y_filtered, groups_filtered, available_features
 
     @staticmethod
-    def create_normative_pca_model(out_root, datatype, event_condition, results_dir, n_components=None, 
-                                   top_k_features=10, exclude_participants=None):
+    def create_normative_pca_models_cv(out_root, datatype, event_condition, results_dir, 
+                                       n_components=None, folds_json_path=None):
         """
-        Create a normative PCA model using participant data for specific event-condition.
+        Create normative PCA models using 5-fold cross-validation across participants.
+        
+        For each fold:
+        - Train PCA on 4/5 of participants (training set)
+        - Project test participants' data into the PCA space
+        - Save per-fold results and test projections
+        
+        After all folds:
+        - Aggregate explained variance statistics across folds
         """
-        print(f"Creating normative PCA model for {datatype} - {event_condition}")
+        print(f"Creating CV-based normative PCA models for {datatype} - {event_condition}")
         
         # Parse event and condition from event_condition
         parts = event_condition.split()
-        condition = parts[-1]  # Last part is condition (AR, VR, Normal)
-        event = " ".join(parts[:-1])  # Everything except last part is event name
+        condition = parts[-1]
+        event = " ".join(parts[:-1])
         event_filename = event.replace(' ', '_')
         
-        # Create organized directory structure: pca_models/Event/Condition
-        pc_model_dir = os.path.join(results_dir, "pca_models", event_filename, condition)
-        os.makedirs(pc_model_dir, exist_ok=True)
+        # Create CV results directory
+        cv_dir = os.path.join(results_dir, "pca_models", event_filename, condition, "top100_cv")
+        os.makedirs(cv_dir, exist_ok=True)
         
-        # Create output filename (simplified since it's in organized folders)
-        outname = f"{datatype}_{event_filename}_{condition}_top{top_k_features}_pca"
+        # Load top 100 features
+        top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
         
-        # Load top features from prevalence-based feature selection
-        top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k_features)
-        
-        # Get available participants for this event-condition
+        # Get available participants
         available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
         if event_condition not in available_data:
             raise ValueError(f"Event-condition '{event_condition}' not found in available data")
         
         all_participants = available_data[event_condition]
+        print(f"Total participants available: {len(all_participants)}")
         
-        # Exclude specified participants if any
-        if exclude_participants:
-            participants = [p for p in all_participants if p not in exclude_participants]
-            print(f"Excluding participants: {exclude_participants}")
-        else:
-            participants = all_participants
+        # Get CV folds
+        folds = NormativePCAModel.get_cv_folds(all_participants, k=5, folds_json_path=folds_json_path)
+        print(f"Created {len(folds)} folds for cross-validation")
         
-        # Calculate n_components as n_participants - 1
-        n_participants = len(participants)
-        if n_components is None:
-            n_components = n_participants - 1
+        # Store results for each fold
+        fold_results = []
         
-        print(f"Using {n_participants} participants for normative model: {participants}")
-        print(f"Number of components to compute: {n_components}")
-        
-        # Load and filter data (only event windows)
-        X_filtered, y_filtered, groups_filtered, feature_names = NormativePCAModel.load_event_condition_data(
-            out_root, datatype, event_condition, participants, top_features, filter_event_only=True
-        )
-        
-        if len(X_filtered) == 0:
-            raise ValueError("No event windows found for the specified participants")
-        
-        # Create PCA model
-        pca = PCA()
-        pca.setData(X_filtered.values.T)  # Transpose to (features, samples) format
-        pca.inc_svd_decompose(n_components)
-        pc = pca.PC
+        # Process each fold
+        for fold_idx, fold in enumerate(folds):
+            print(f"\n{'='*60}")
+            print(f"Processing Fold {fold_idx}")
+            print(f"{'='*60}")
+            
+            train_participants = fold['train']
+            test_participants = fold['test']
+            
+            print(f"Training participants ({len(train_participants)}): {train_participants}")
+            print(f"Test participants ({len(test_participants)}): {test_participants}")
+            
+            # Determine number of components for this fold
+            if n_components is None:
+                n_components_fold = len(train_participants) - 1
+            else:
+                n_components_fold = min(n_components, len(train_participants) - 1)
+            
+            print(f"Number of components for this fold: {n_components_fold}")
+            
+            try:
+                # Load training data (event windows only)
+                X_train, y_train, groups_train, feature_names = NormativePCAModel.load_event_condition_data(
+                    out_root, datatype, event_condition, train_participants, top_features, filter_event_only=True
+                )
+                
+                if len(X_train) == 0:
+                    print(f"Warning: No training data for fold {fold_idx}")
+                    continue
+                
+                # Fit PCA on training data
+                pca = PCA()
+                pca.setData(X_train.values.T)  # Transpose to (features, samples)
+                pca.inc_svd_decompose(n_components_fold)
+                pc = pca.PC
+                
+                # Extract explained variance
+                if hasattr(pc, 'explained_variance_ratio_') and pc.explained_variance_ratio_ is not None:
+                    evr = np.array(pc.explained_variance_ratio_, dtype=float)
+                else:
+                    evr = np.array(pc.getNormSpectrum(), dtype=float)
+                
+                cum_var = evr.cumsum()
+                
+                # Save fold-specific loadings
+                loadings_df = pd.DataFrame(
+                    pc.modes, 
+                    index=feature_names, 
+                    columns=[f"PC{i+1}" for i in range(pc.modes.shape[1])]
+                )
+                loadings_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_loadings.csv")
+                loadings_df.to_csv(loadings_path)
+                print(f"Saved loadings to {loadings_path}")
+                
+                # Save fold-specific explained variance
+                ev_data = []
+                for i in range(len(evr)):
+                    ev_data.append({
+                        'Component': i + 1,
+                        'Explained_Variance_Ratio': evr[i],
+                        'Cumulative_Variance': cum_var[i]
+                    })
+                ev_df = pd.DataFrame(ev_data)
+                ev_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_explained_variance.csv")
+                ev_df.to_csv(ev_path, index=False)
+                print(f"Saved explained variance to {ev_path}")
+                
+                # Store fold results
+                fold_results.append({
+                    'fold': fold_idx,
+                    'n_components': n_components_fold,
+                    'evr': evr,
+                    'cum_var': cum_var,
+                    'n_train_samples': len(X_train),
+                    'n_train_participants': len(train_participants)
+                })
+                
+                # Project test data into PCA space
+                if len(test_participants) > 0:
+                    try:
+                        X_test, y_test, groups_test, _ = NormativePCAModel.load_event_condition_data(
+                            out_root, datatype, event_condition, test_participants, top_features, filter_event_only=True
+                        )
+                        
+                        if len(X_test) > 0:
+                            # Project test data
+                            # GIAS3 PCA expects data as (features, samples)
+                            test_scores = pc.project(X_test.values.T).T  # Result is (samples, components)
+                            
+                            # Save test projection scores
+                            test_scores_df = pd.DataFrame(
+                                test_scores,
+                                columns=[f"PC{i+1}" for i in range(test_scores.shape[1])]
+                            )
+                            test_scores_df.insert(0, 'Participant', groups_test)
+                            
+                            test_proj_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_test_projection.csv")
+                            test_scores_df.to_csv(test_proj_path, index=False)
+                            print(f"Saved test projections to {test_proj_path}")
+                            
+                            # Compute reconstruction and variance metrics
+                            # Reconstruct from PCA space: X_reconstructed = mean + (scores @ loadings.T)
+                            X_reconstructed = pc.mean.reshape(-1, 1) + (pc.modes @ test_scores.T)
+                            X_reconstructed = X_reconstructed.T  # Back to (samples, features)
+                            
+                            # Compute reconstruction error per sample
+                            reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed) ** 2).sum(axis=1))
+                            
 
-        # Explained variance
-        if hasattr(pc, 'explained_variance_ratio_') and pc.explained_variance_ratio_ is not None:
-            ratio = np.array(pc.explained_variance_ratio_, dtype=float)
-            expl = np.array(pc.explained_variance_, dtype=float)
-        else:
-            ratio = np.array(pc.getNormSpectrum(), dtype=float)
-            expl = ratio * ratio.sum()  # Calculate absolute variance from ratio
+                            # Compute variance captured (squared norm of scores)
+                            variance_captured = (test_scores ** 2).sum(axis=1)
+                            
+                            # Save variance metrics
+                            variance_metrics = pd.DataFrame({
+                                'Participant': groups_test,
+                                'Reconstruction_Error': reconstruction_errors,
+                                'Variance_Captured': variance_captured
+                            })
+                            
+                            variance_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_test_variance_metrics.csv")
+                            variance_metrics.to_csv(variance_path, index=False)
+                            print(f"Saved variance metrics to {variance_path}")
+                            
+                            fold_results[-1]['n_test_samples'] = len(X_test)
+                            fold_results[-1]['n_test_participants'] = len(test_participants)
+                            fold_results[-1]['mean_reconstruction_error'] = reconstruction_errors.mean()
+                            fold_results[-1]['mean_variance_captured'] = variance_captured.mean()
+                        else:
+                            print(f"Warning: No test data available for fold {fold_idx}")
+                    
+                    except Exception as e:
+                        print(f"Error projecting test data for fold {fold_idx}: {e}")
+                        traceback.print_exc()
+                
+            except Exception as e:
+                print(f"Error processing fold {fold_idx}: {e}")
+                traceback.print_exc()
+                continue
         
-        cum = ratio.cumsum()
-
-        # Save explained variance to CSV
-        csv_path = os.path.join(pc_model_dir, f"{outname}_explained_variance.csv")
-        with open(csv_path, 'w', newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Component", "Explained Variance", "Explained Variance Ratio", "Cumulative Variance"])
-            for i, (e, r, c) in enumerate(zip(expl, ratio, cum), start=1):
-                writer.writerow([i, e, r, c])
-        print(f"Explained variance saved to {csv_path}")
-
-        # Save mean and PC loadings with feature names
-        np.savetxt(os.path.join(pc_model_dir, f"{outname}_mean.csv"), pc.mean, delimiter=",", 
-                   header="feature_means", comments="")
+        # Aggregate results across folds
+        if not fold_results:
+            print("Warning: No successful folds")
+            return None
         
-        # Save loadings with feature names as header
-        loadings_df = pd.DataFrame(pc.modes, 
-                                   index=feature_names, 
-                                   columns=[f"PC{i+1}" for i in range(pc.modes.shape[1])])
-        loadings_df.to_csv(os.path.join(pc_model_dir, f"{outname}_loadings.csv"))
-
-        # Save projected weights (scores)
-        scores = None
-        if pc.projectedWeights is not None:
-            scores = pc.projectedWeights.T  # Transpose to (samples, components)
-            scores_df = pd.DataFrame(scores, columns=[f"PC{i+1}" for i in range(scores.shape[1])])
-            scores_df.to_csv(os.path.join(pc_model_dir, f"{outname}_scores.csv"), index=False)
-
-        # PCA plots
-        k_plot = len(ratio)
+        print(f"\n{'='*60}")
+        print("Aggregating results across folds")
+        print(f"{'='*60}")
         
-        # Bar plot of explained variance %
-        plt.figure(figsize=(10, 6))
-        plt.bar([f"PC{i}" for i in range(1, k_plot + 1)], ratio * 100)
-        plt.ylabel("Explained Variance (%)")
-        plt.xlabel("Principal Component")
-        plt.title(f"Explained Variance - {event_condition} (top{top_k_features})")
-        plt.xticks(rotation=45)
+        # Find maximum number of components across folds
+        max_components = max(result['n_components'] for result in fold_results)
+        
+        # Pad shorter EVR arrays with NaN
+        evr_matrix = np.full((len(fold_results), max_components), np.nan)
+        cum_matrix = np.full((len(fold_results), max_components), np.nan)
+        
+        for i, result in enumerate(fold_results):
+            n_comp = len(result['evr'])
+            evr_matrix[i, :n_comp] = result['evr']
+            cum_matrix[i, :n_comp] = result['cum_var']
+        
+        # Compute mean and std, ignoring NaNs
+        evr_mean = np.nanmean(evr_matrix, axis=0)
+        evr_std = np.nanstd(evr_matrix, axis=0)
+        cum_mean = np.nanmean(cum_matrix, axis=0)
+        cum_std = np.nanstd(cum_matrix, axis=0)
+        
+        # Save aggregated explained variance
+        agg_data = []
+        for i in range(max_components):
+            agg_data.append({
+                'Component': i + 1,
+                'EVR_mean': evr_mean[i],
+                'EVR_sd': evr_std[i],
+                'Cum_mean': cum_mean[i],
+                'Cum_sd': cum_std[i]
+            })
+        
+        agg_df = pd.DataFrame(agg_data)
+        agg_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_aggregated_explained_variance.csv")
+        agg_df.to_csv(agg_path, index=False)
+        print(f"Saved aggregated results to {agg_path}")
+        
+        # Create visualization of aggregated results
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Plot 1: Explained variance with error bars
+        components = np.arange(1, max_components + 1)
+        ax1.errorbar(components, evr_mean * 100, yerr=evr_std * 100, 
+                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=6)
+        ax1.set_xlabel("Principal Component")
+        ax1.set_ylabel("Explained Variance (%)")
+        ax1.set_title(f"Explained Variance (Mean ± SD)\n{event_condition} - 5-Fold CV")
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Cumulative variance with error bars
+        ax2.errorbar(components, cum_mean * 100, yerr=cum_std * 100,
+                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=6)
+        ax2.set_xlabel("Number of Principal Components")
+        ax2.set_ylabel("Cumulative Explained Variance (%)")
+        ax2.set_title(f"Cumulative Explained Variance (Mean ± SD)\n{event_condition} - 5-Fold CV")
+        ax2.grid(True, alpha=0.3)
+        
         plt.tight_layout()
-        plt.savefig(os.path.join(pc_model_dir, f"{outname}_explained_variance.png"), dpi=300)
+        plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_explained_variance.png")
+        plt.savefig(plot_path, dpi=300)
         plt.close()
+        print(f"Saved aggregated plot to {plot_path}")
         
-        # Cumulative variance plot
-        plt.figure(figsize=(10, 6))
-        plt.plot(range(1, k_plot + 1), cum * 100, marker='o', linewidth=2, markersize=6)
-        plt.ylabel("Cumulative Explained Variance (%)")
-        plt.xlabel("Number of Principal Components")
-        plt.title(f"Cumulative Explained Variance - {event_condition} (top{top_k_features})")
-        plt.grid(True, linewidth=0.5, alpha=0.6)
-        plt.tight_layout()
-        plt.savefig(os.path.join(pc_model_dir, f"{outname}_cumulative_explained_variance.png"), dpi=300)
-        plt.close()
-        
-        # PC1 vs PC2 scores scatter plot (if available)
-        if scores is not None and scores.shape[1] >= 2:
-            plt.figure(figsize=(8, 6))
-            plt.scatter(scores[:, 0], scores[:, 1], s=12, alpha=0.6)
-            plt.xlabel("PC1 Score")
-            plt.ylabel("PC2 Score")
-            plt.title(f"PC1 vs PC2 Scores - {event_condition} (top{top_k_features})")
-            plt.grid(True, linewidth=0.5, alpha=0.6)
-            plt.tight_layout()
-            plt.savefig(os.path.join(pc_model_dir, f"{outname}_pc1_pc2_scatter.png"), dpi=300)
-            plt.close()
-
-        # Save PCA model files
-        pc.save(os.path.join(pc_model_dir, outname))
-        pc.savemat(os.path.join(pc_model_dir, f"{outname}.mat"))
-        print(f"Done {outname}")
-        
-        # Return performance metrics for comparison
+        # Return summary
         return {
             'event_condition': event_condition,
-            'n_components': len(ratio),
-            'explained_variance_ratio': ratio,
-            'cumulative_variance': cum,
-            'total_variance_explained': cum[-1] if len(cum) > 0 else 0,
-            'n_samples': X_filtered.shape[0],
-            'n_features': X_filtered.shape[1]
+            'n_folds': len(fold_results),
+            'n_components_per_fold': [r['n_components'] for r in fold_results],
+            'evr_mean': evr_mean,
+            'evr_sd': evr_std,
+            'cum_mean': cum_mean,
+            'cum_sd': cum_std,
+            'total_variance_explained': cum_mean[-1] if len(cum_mean) > 0 else 0,
+            'fold_results': fold_results
         }
 
-    @staticmethod
-    def compare_models_performance(performance_results, results_dir):
-        """
-        Compare PCA models across event-condition combinations by variance explained.
-        Creates separate comparison plots for each event.
-        """
-        if not performance_results:
-            return
-        
-        # Use pca_models directory for comparisons too
-        pca_models_dir = os.path.join(results_dir, "pca_models")
-        
-        # Group results by event
-        events_data = {}
-        for result in performance_results:
-            event_condition = result['event_condition']
-            parts = event_condition.split()
-            event = " ".join(parts[:-1])  # Event name
-            condition = parts[-1]         # Condition (AR, VR, Normal)
-            
-            if event not in events_data:
-                events_data[event] = []
-            
-            events_data[event].append({
-                'condition': condition,
-                'total_variance_explained': result['total_variance_explained'],
-                'event_condition': event_condition,
-                'result': result
-            })
-        
-        # Create separate plots for each event (save in event folder)
-        for event, conditions_data in events_data.items():
-            event_filename = event.replace(" ", "_").replace("/", "_")
-            event_dir = os.path.join(pca_models_dir, event_filename)
-            
-            # Sort conditions for consistent ordering
-            condition_order = ['Normal', 'AR', 'VR']
-            conditions_data.sort(key=lambda x: condition_order.index(x['condition']) 
-                               if x['condition'] in condition_order else 999)
-            
-            conditions = [cd['condition'] for cd in conditions_data]
-            total_var_explained = [cd['total_variance_explained'] for cd in conditions_data]
-            
-            # Create individual event comparison plot (saved in event folder)
-            plt.figure(figsize=(10, 6))
-            bars = plt.bar(conditions, [v*100 for v in total_var_explained], 
-                          color=['skyblue', 'lightcoral', 'lightgreen'])
-            plt.ylabel("Total Variance Explained (%)")
-            plt.xlabel("Condition")
-            plt.title(f"PCA Model Performance Comparison - {event}")
-            plt.ylim(0, 100)
-            
-            # Add value labels on bars
-            for bar, val in zip(bars, total_var_explained):
-                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
-                        f'{val*100:.1f}%', ha='center', va='bottom', fontweight='bold')
-            
-            plt.tight_layout()
-            plt.savefig(os.path.join(event_dir, f"pca_comparison_{event_filename}.png"), dpi=300)
-            plt.close()
-            
-            print(f"Created comparison plot for {event}")
-        
-        # Create overall comparison plot (save at pca_models root)
-        event_conditions = [r['event_condition'] for r in performance_results]
-        total_var_explained_all = [r['total_variance_explained'] for r in performance_results]
-        
-        plt.figure(figsize=(18, 8))
-        bars = plt.bar(event_conditions, [v*100 for v in total_var_explained_all])
-        plt.ylabel("Total Variance Explained (%)")
-        plt.xlabel("Event-Condition Combination")
-        plt.title("PCA Model Performance Comparison - All Event-Conditions")
-        plt.xticks(rotation=45, ha='right')
-        
-        # Add value labels on bars
-        for bar, val in zip(bars, total_var_explained_all):
-            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
-                    f'{val*100:.1f}%', ha='center', va='bottom', fontsize=8)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(pca_models_dir, "pca_model_comparison_all.png"), dpi=300)
-        plt.close()
-        
-        # Save CSV summaries at pca_models root
-        # Save detailed comparison CSV (grouped by event)
-        comparison_data = []
-        for event, conditions_data in events_data.items():
-            for cd in conditions_data:
-                result = cd['result']
-                comparison_data.append({
-                    'Event': event,
-                    'Condition': cd['condition'],
-                    'Event_Condition': cd['event_condition'],
-                    'N_Components': result['n_components'],
-                    'Total_Variance_Explained': f"{result['total_variance_explained']:.4f}",
-                    'Total_Variance_Explained_Pct': f"{result['total_variance_explained']*100:.2f}%",
-                    'N_Samples': result['n_samples'],
-                    'N_Features': result['n_features'],
-                    'PC1_Variance': f"{result['explained_variance_ratio'][0]:.4f}" if len(result['explained_variance_ratio']) > 0 else "N/A",
-                    'PC2_Variance': f"{result['explained_variance_ratio'][1]:.4f}" if len(result['explained_variance_ratio']) > 1 else "N/A"
-                })
-        
-        comparison_df = pd.DataFrame(comparison_data)
-        comparison_df.to_csv(os.path.join(pca_models_dir, "pca_model_comparison.csv"), index=False)
-        
-        # Create summary table by event
-        summary_data = []
-        for event, conditions_data in events_data.items():
-            conditions_dict = {cd['condition']: cd['total_variance_explained'] for cd in conditions_data}
-            summary_data.append({
-                'Event': event,
-                'Normal_Variance_Pct': f"{conditions_dict.get('Normal', 0)*100:.2f}%" if 'Normal' in conditions_dict else "N/A",
-                'AR_Variance_Pct': f"{conditions_dict.get('AR', 0)*100:.2f}%" if 'AR' in conditions_dict else "N/A", 
-                'VR_Variance_Pct': f"{conditions_dict.get('VR', 0)*100:.2f}%" if 'VR' in conditions_dict else "N/A",
-                'Best_Condition': max(conditions_data, key=lambda x: x['total_variance_explained'])['condition'],
-                'Worst_Condition': min(conditions_data, key=lambda x: x['total_variance_explained'])['condition']
-            })
-        
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_csv(os.path.join(pca_models_dir, "pca_event_summary.csv"), index=False)
-        
-        print(f"Model comparison plots and summaries saved to {pca_models_dir}")
-        print(f"Created {len(events_data)} individual event comparison plots")
-        
 
 if __name__ == "__main__":
     # Set up paths
@@ -549,43 +582,50 @@ if __name__ == "__main__":
     # Parameters
     datatype = "IMU"
     n_components = None  # Automatically set to n_participants - 1
-    top_k_features = 100
+    
+    print("Running in CROSS-VALIDATION mode")
+    
+    # Path to pre-defined folds (if available)
+    folds_json_path = os.path.join(results_dir, "classifier_folds.json")
+    if not os.path.exists(folds_json_path):
+        folds_json_path = None
+        print("No pre-defined folds found; will use deterministic split")
     
     # Get all available event-condition combinations
     available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
-    print("Available event-condition combinations:")
+    print("\nAvailable event-condition combinations:")
     for event_condition, participants in available_data.items():
         print(f"  {event_condition}: {len(participants)} participants")
     
     # Store performance results for comparison
     performance_results = []
     
-    # Process all event-condition combinations
+    # Cross-validation mode
+    print(f"\n{'='*60}")
+    print("CROSS-VALIDATION MODE: Training 5-fold CV PCA models")
+    print(f"{'='*60}\n")
+    
     for event_condition in available_data.keys():
         participants = available_data[event_condition]
-        print(f"\n" + "="*50)
+        print(f"\n{'='*50}")
         print(f"Processing event-condition: {event_condition}")
         print(f"Available participants: {participants}")
         
         try:
-            # Create normative PCA model
-            perf_result = NormativePCAModel.create_normative_pca_model(
+            cv_result = NormativePCAModel.create_normative_pca_models_cv(
                 out_root, datatype, event_condition, results_dir, 
-                n_components=n_components, top_k_features=top_k_features
+                n_components=n_components, folds_json_path=folds_json_path
             )
             
-            performance_results.append(perf_result)
-            print(f"Successfully processed {event_condition}")
+            if cv_result:
+                performance_results.append(cv_result)
+                print(f"Successfully processed {event_condition} with CV")
             
         except Exception as e:
             print(f"Error processing {event_condition}: {e}")
-            import traceback
             traceback.print_exc()
             continue
     
-    # Compare model performances
-    NormativePCAModel.compare_models_performance(performance_results, results_dir)
-    
-    print(f"\n" + "="*50)
-    print("PCA model creation completed for all event-condition combinations.")
-    print(f"Performance comparison saved to {results_dir}")
+    print(f"\n{'='*60}")
+    print(f"CV-based PCA model creation completed for all event-condition combinations.")
+    print(f"Results saved to {results_dir}/pca_models/")
