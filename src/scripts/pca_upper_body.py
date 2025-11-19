@@ -540,8 +540,8 @@ class NormativePCAModel:
 
 if __name__ == "__main__":
     # Set up paths
-    out_root = "Z:/Upper Body/Results/10 Participants/features"
-    results_dir = "Z:/Upper Body/Results/10 Participants/models"
+    out_root = "Z:/Upper Body/Results/30 Participants/features"
+    results_dir = "Z:/Upper Body/Results/30 Participants/models"
     
     # Create results directory if it doesn't exist
     os.makedirs(results_dir, exist_ok=True)
