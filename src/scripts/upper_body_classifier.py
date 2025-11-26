@@ -810,7 +810,7 @@ class UpperBodyClassifier:
         final_clf.fit(X_all, y_all)
         
         # Save trained final model
-        final_model_filename = f"{datatype}_{event.replace(' ', '_')}_10_participants_final{file_suffix}_rf_model.pkl"
+        final_model_filename = f"{datatype}_{event.replace(' ', '_')}_final{file_suffix}_rf_model.pkl"
         final_model_path = os.path.join(results_dir, final_model_filename)
         joblib.dump(final_clf, final_model_path)
         print(f"Saved final model: {final_model_path}")
