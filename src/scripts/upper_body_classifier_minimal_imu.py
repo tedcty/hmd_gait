@@ -95,21 +95,16 @@ class MinimalIMUClassifier:
         print(f"  Loaded data shape: {X_all.shape}")
         print(f"  Participants: {len(np.unique(groups))}")
         
-        # Step 4: Create file suffix for model naming
-        file_suffix = f"_{subset_name}" if subset_name else "_minimal_imu"
-
-        print(f"Using file suffix: {file_suffix}")
-        
-        # Step 5: Run k-fold cross-validation with the custom suffix
+        # Step 4: Run k-fold cross-validation with the custom suffix
         print(f"Step 4: Running {k_folds}-fold cross-validation...")
         cv_results = UpperBodyClassifier.k_fold_cross_validation(
             out_root, datatype, event, results_dir, filtered_features,
-            k=k_folds, rf_n_jobs=rf_n_jobs, top_k=None,
-            preloaded_data=(X_all, y_all, groups),
-            file_suffix=file_suffix
+            k=k_folds, rf_n_jobs=rf_n_jobs, 
+            top_k=subset_name,
+            preloaded_data=(X_all, y_all, groups)
         )
         
-        # Step 6: Save minimal IMU configuration
+        # Step 5: Save minimal IMU configuration
         config_path = os.path.join(results_dir, f"{event.replace(' ', '_')}_minimal_imu_config.json")
         config = {
             'event': event,
