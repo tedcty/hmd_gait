@@ -231,44 +231,90 @@ if __name__ == "__main__":
     half_cores = max(1, total_cores // 2)
     
     loading_n_jobs = min(16, half_cores)
-    rf_n_jobs = 16
+    rf_n_jobs = half_cores
     
     print(f"Core allocation:")
     print(f"  Loading: {loading_n_jobs} cores")
     print(f"  Random Forest: {rf_n_jobs} cores")
     
     # Define the event you want to train
-    event = "Straight walk"  # Change this to your desired event
+    event = "Straight walk"
     
-    # Define the minimal IMU subset for this event
-    imu_subset = [
-        "Head_imu",
-        "LeftForeArm_imu", 
-        "RightForeArm_imu"
-    ]
+    # Define both IMU subsets to test
+    imu_subsets = {
+        "minimal_analysis": ["LeftHand_imu", "RightHand_imu"],  # Based on analysis (normalised sum of importance scores)
+        "product_usecase": ["Head_imu", "LeftHand_imu"]         # Based on product use-case considerations
+    }
     
-    # Create results directory for this event
-    event_results_dir = os.path.join(results_root, event.replace(" ", "_"))
-    os.makedirs(event_results_dir, exist_ok=True)
-    
-    print(f"\nTraining single event: {event}")
+    print(f"\nTraining event: {event}")
+    print(f"Testing {len(imu_subsets)} IMU subsets")
     print(f"Start time: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
     
-    try:
-        cv_results = MinimalIMUClassifier.train_minimal_imu_model(
-            out_root=out_root,
-            models_dir=models_root,
-            event=event,
-            imu_subset=imu_subset,
-            results_dir=event_results_dir,
-            k_folds=5,
-            rf_n_jobs=rf_n_jobs,
-            loading_n_jobs=loading_n_jobs
+    results_comparison = []
+    
+    for subset_name, imu_subset in imu_subsets.items():
+        print(f"\n{'='*80}")
+        print(f"Training with {subset_name}: {imu_subset}")
+        print(f"{'='*80}\n")
+        
+        # Create results directory for this subset
+        subset_results_dir = os.path.join(
+            results_root, 
+            event.replace(" ", "_"), 
+            subset_name
         )
+        os.makedirs(subset_results_dir, exist_ok=True)
         
-        print(f"\nEnd time: {datetime.now():%Y-%m-%d %H:%M:%S}")
-        print(f"Training completed successfully for {event}!")
-        
-    except Exception as e:
-        print(f"\nTraining failed with error: {e}")
-        raise
+        try:
+            cv_results = MinimalIMUClassifier.train_minimal_imu_model(
+                out_root=out_root,
+                models_dir=models_root,
+                event=event,
+                imu_subset=imu_subset,
+                results_dir=subset_results_dir,
+                k_folds=5,
+                rf_n_jobs=rf_n_jobs,
+                loading_n_jobs=loading_n_jobs
+            )
+            
+            results_comparison.append({
+                'subset_name': subset_name,
+                'imus': ', '.join(imu_subset),
+                'num_imus': len(imu_subset),
+                'overall_auc': cv_results['overall_auc'],
+                'cv_auc_mean': cv_results['cv_auc_mean'],
+                'cv_auc_std': cv_results['cv_auc_std'],
+                'accuracy': cv_results['accuracy'],
+                'f1_score': cv_results['f1_score']
+            })
+            
+        except Exception as e:
+            print(f"\nTraining failed for {subset_name}: {e}")
+            results_comparison.append({
+                'subset_name': subset_name,
+                'imus': ', '.join(imu_subset),
+                'num_imus': len(imu_subset),
+                'overall_auc': None,
+                'cv_auc_mean': None,
+                'cv_auc_std': None,
+                'accuracy': None,
+                'f1_score': None,
+                'error': str(e)
+            })
+    
+    # Save comparison report
+    comparison_df = pd.DataFrame(results_comparison)
+    comparison_path = os.path.join(
+        results_root, 
+        f"{event.replace(' ', '_')}_imu_subset_comparison.csv"
+    )
+    comparison_df.to_csv(comparison_path, index=False)
+    
+    print(f"\n{'='*80}")
+    print(f"End time: {datetime.now():%Y-%m-%d %H:%M:%S}")
+    print(f"Training completed for all subsets!")
+    print(f"{'='*80}\n")
+    
+    print("Comparison Results:")
+    print(comparison_df.to_string(index=False))
+    print(f"\nComparison saved to: {comparison_path}")
