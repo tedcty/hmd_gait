@@ -4,18 +4,11 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 import pandas as pd
 import numpy as np
 import json
-import joblib
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GroupKFold
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve, auc
-import matplotlib.pyplot as plt
-import seaborn as sns
 from datetime import datetime
 import gc
 
 # Import reusable functions from upper_body_classifier.py
 from upper_body_classifier import UpperBodyClassifier
-from event_constants import EventWindowSize
 
 
 class MinimalIMUClassifier:
@@ -60,7 +53,7 @@ class MinimalIMUClassifier:
     @staticmethod
     def train_minimal_imu_model(out_root, models_dir, event, imu_subset, 
                                 results_dir, k_folds=5, rf_n_jobs=1, 
-                                loading_n_jobs=8):
+                                loading_n_jobs=8, subset_name=None):
         """
         Train a Random Forest classifier using top 100 features on minimal IMU subset.
         """
@@ -69,6 +62,8 @@ class MinimalIMUClassifier:
         print(f"\n{'='*80}")
         print(f"Training Minimal IMU Classifier for: {event}")
         print(f"Using IMU subset: {imu_subset}")
+        if subset_name:
+            print(f"Subset name: {subset_name}")
         print(f"{'='*80}\n")
         
         # Step 1: Load top 100 features
@@ -100,19 +95,26 @@ class MinimalIMUClassifier:
         print(f"  Loaded data shape: {X_all.shape}")
         print(f"  Participants: {len(np.unique(groups))}")
         
-        # Step 4: Run k-fold cross-validation
+        # Step 4: Create file suffix for model naming
+        file_suffix = f"_{subset_name}" if subset_name else "_minimal_imu"
+
+        print(f"Using file suffix: {file_suffix}")
+        
+        # Step 5: Run k-fold cross-validation with the custom suffix
         print(f"Step 4: Running {k_folds}-fold cross-validation...")
         cv_results = UpperBodyClassifier.k_fold_cross_validation(
             out_root, datatype, event, results_dir, filtered_features,
             k=k_folds, rf_n_jobs=rf_n_jobs, top_k=None,
-            preloaded_data=(X_all, y_all, groups)
+            preloaded_data=(X_all, y_all, groups),
+            file_suffix=file_suffix
         )
         
-        # Step 5: Save minimal IMU configuration
+        # Step 6: Save minimal IMU configuration
         config_path = os.path.join(results_dir, f"{event.replace(' ', '_')}_minimal_imu_config.json")
         config = {
             'event': event,
             'imu_subset': imu_subset,
+            'subset_name': subset_name,
             'num_features': len(filtered_features),
             'features': filtered_features,
             'cv_results': {
@@ -274,7 +276,8 @@ if __name__ == "__main__":
                 results_dir=subset_results_dir,
                 k_folds=5,
                 rf_n_jobs=rf_n_jobs,
-                loading_n_jobs=loading_n_jobs
+                loading_n_jobs=loading_n_jobs,
+                subset_name=subset_name
             )
             
             results_comparison.append({
