@@ -6,6 +6,11 @@ import numpy as np
 import json
 from datetime import datetime
 import gc
+from tqdm import tqdm
+from joblib import Parallel, delayed
+import psutil
+import multiprocessing
+import traceback
 
 # Import reusable functions from upper_body_classifier.py
 from upper_body_classifier import UpperBodyClassifier
@@ -13,229 +18,314 @@ from upper_body_classifier import UpperBodyClassifier
 
 class MinimalIMUClassifier:
     """
-    Classifier for minimal IMU subset using pre-selected top 100 features.
-    Skips feature extraction and selection, goes straight to training.
+    Classifier for minimal IMU subset using same feature selection as full classifier.
+    Only loads features from specified IMU sensors, then runs identical pipeline.
     """
     
     @staticmethod
-    def filter_features_by_imu_subset(features_list, imu_subset):
+    def filter_columns_by_imu_subset(columns, imu_subset):
         """
-        Filter feature list to only include features from the specified IMU subset.
+        Filter column list to only include features from the specified IMU subset.
         """
-        filtered_features = []
-        for feature in features_list:
-            # Check if feature starts with any of the allowed IMU sensor IDs
-            if any(feature.startswith(f"{imu}_") for imu in imu_subset):
-                filtered_features.append(feature)
-        
-        return filtered_features
+        filtered_columns = []
+        for col in columns:
+            # Check if column starts with any of the allowed IMU sensor IDs
+            if any(col.startswith(f"{imu}_") for imu in imu_subset):
+                filtered_columns.append(col)
+        return filtered_columns
     
     @staticmethod
-    def load_top_100_features(models_dir, datatype, event):
+    def load_features_for_participants_filtered(out_root, datatype, event, participants, 
+                                                imu_subset, return_groups=False, n_jobs_loading=8):
         """
-        Load the top 100 selected features from the prevalence analysis.
-
+        Load features but filter to only include specified IMU sensors.
+        Similar to UpperBodyClassifier.load_features_for_participants but with IMU filtering.
         """
-        prevalence_file = os.path.join(
-            models_dir, datatype, event.replace(" ", "_"), 
-            "top_100", f"{datatype}_{event}_prevalence_top100_features.json"
+        
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        
+        def print_memory_usage():
+            process = psutil.Process()
+            memory_gb = process.memory_info().rss / (1024**3)
+            print(f"Memory usage: {memory_gb:.2f} GB")
+        
+        print("Scanning files and collecting column names...")
+        file_list = []
+        all_cols_set = set()
+        
+        for pid in participants:
+            pid_path = os.path.join(base, pid)
+            if not os.path.isdir(pid_path):
+                continue
+            for sensor in os.listdir(pid_path):
+                # Filter at sensor directory level
+                if sensor not in imu_subset:
+                    continue
+                    
+                sensor_path = os.path.join(pid_path, sensor)
+                if not os.path.isdir(sensor_path):
+                    continue
+                for fname in os.listdir(sensor_path):
+                    if fname.endswith("_X.csv"):
+                        stem = fname[:-6]
+                        Xp = os.path.join(sensor_path, f"{stem}_X.csv")
+                        Yp = os.path.join(sensor_path, f"{stem}_y.csv")
+                        if os.path.exists(Yp):
+                            file_list.append((pid, Xp, Yp))
+                            
+                            # Read only header for column names
+                            sample_df = pd.read_csv(Xp, index_col="window_id", nrows=0)
+                            all_cols_set.update(sample_df.columns)
+        
+        if not file_list:
+            raise RuntimeError(f"No CSV features found for IMU subset {imu_subset}")
+        
+        # Filter columns to only those from the IMU subset
+        all_cols = sorted(all_cols_set)
+        filtered_cols = MinimalIMUClassifier.filter_columns_by_imu_subset(all_cols, imu_subset)
+        
+        print(f"File scan completed - Found {len(file_list)} files")
+        print(f"Total columns: {len(all_cols)}, Filtered to IMU subset: {len(filtered_cols)}")
+        print_memory_usage()
+        
+        def load_single_file(pid, Xp, Yp, filtered_cols):
+            """Helper function to load a single file pair with column filtering"""
+            try:
+                X_df = pd.read_csv(Xp, index_col="window_id")
+                
+                # Filter to only IMU subset columns
+                X_df = X_df[[col for col in X_df.columns if col in filtered_cols]]
+                
+                # Convert to float32
+                for col in X_df.columns:
+                    X_df[col] = pd.to_numeric(X_df[col], errors='coerce').astype(np.float32)
+                
+                y_df = pd.read_csv(Yp, index_col="window_id")
+                y_sr = y_df.iloc[:, 0].astype(np.int8)
+                
+                # Align indices
+                common_idx = X_df.index.intersection(y_sr.index)
+                if len(common_idx) == 0:
+                    return None, None, None
+                    
+                X_df = X_df.loc[common_idx]
+                y_sr = y_sr.loc[common_idx]
+                
+                # Reindex to ensure consistent column order
+                X_df = X_df.reindex(columns=filtered_cols, fill_value=np.float32(0.0))
+                
+                groups_data = [pid] * len(X_df) if return_groups else []
+                
+                return X_df, y_sr, groups_data
+            except Exception as e:
+                print(f"Error loading {Xp}: {e}")
+                return None, None, None
+        
+        # Parallel file loading
+        print(f"Loading {len(file_list)} files in parallel with {n_jobs_loading} workers...")
+        
+        results = Parallel(n_jobs=n_jobs_loading, prefer="processes")(
+            delayed(load_single_file)(pid, Xp, Yp, filtered_cols) 
+            for pid, Xp, Yp in tqdm(file_list, desc="Loading files", unit="file")
         )
         
-        if not os.path.exists(prevalence_file):
-            raise FileNotFoundError(f"Top 100 features file not found: {prevalence_file}")
+        # Filter out failed loads
+        X_list, y_list, groups_list = [], [], []
+        for X_df, y_sr, groups_data in results:
+            if X_df is not None:
+                X_list.append(X_df)
+                y_list.append(y_sr)
+                if return_groups:
+                    groups_list.extend(groups_data)
         
-        with open(prevalence_file, 'r') as f:
-            feature_importances = json.load(f)
+        print("Concatenating DataFrames...")
+        X_all = pd.concat(X_list, axis=0)
+        y_all = pd.concat(y_list, axis=0).astype(np.int8)
         
-        # Return feature names (keys of the dictionary)
-        return list(feature_importances.keys())
+        print(f"Final features shape: {X_all.shape}")
+        print_memory_usage()
+        
+        if return_groups:
+            groups = np.array(groups_list)
+            print(f"Groups shape: {groups.shape}, Unique participants: {len(np.unique(groups))}")
+            return X_all, y_all, groups
+        else:
+            return X_all, y_all
     
     @staticmethod
-    def train_minimal_imu_model(out_root, models_dir, event, imu_subset, 
-                                results_dir, k_folds=5, rf_n_jobs=1, 
-                                loading_n_jobs=8, subset_name=None):
+    def participant_level_feature_selection_filtered(out_root, datatype, event, imu_subset, selector_n_jobs=1):
         """
-        Train a Random Forest classifier using top 100 features on minimal IMU subset.
+        Run feature selection on each participant with filtered IMU subset.
+        Uses UpperBodyClassifier's feature selection but loads filtered data.
         """
-        datatype = "IMU"  # Only IMU for this classifier
-        
-        print(f"\n{'='*80}")
-        print(f"Training Minimal IMU Classifier for: {event}")
-        print(f"Using IMU subset: {imu_subset}")
-        if subset_name:
-            print(f"Subset name: {subset_name}")
-        print(f"{'='*80}\n")
-        
-        # Step 1: Load top 100 features
-        print("Step 1: Loading top 100 features...")
-        top_100_features = MinimalIMUClassifier.load_top_100_features(
-            models_dir, datatype, event
-        )
-        print(f"  Loaded {len(top_100_features)} features")
-        
-        # Step 2: Filter to minimal IMU subset
-        print(f"Step 2: Filtering features to minimal IMU subset...")
-        filtered_features = MinimalIMUClassifier.filter_features_by_imu_subset(
-            top_100_features, imu_subset
-        )
-        print(f"  Filtered to {len(filtered_features)} features from {len(imu_subset)} IMUs")
-        
-        if len(filtered_features) == 0:
-            raise ValueError(f"No features found for IMU subset {imu_subset}. Check feature names and IMU IDs.")
-        
-        # Step 3: Load data with only the filtered features
-        print("Step 3: Loading data with filtered features...")
         base = os.path.join(out_root, datatype, event.replace(" ", "_"))
         all_pids = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
         
-        X_all, y_all, groups = UpperBodyClassifier.load_features_for_participants_selective(
-            out_root, datatype, event, all_pids, filtered_features, 
-            return_groups=True, n_jobs_loading=loading_n_jobs
-        )
-        print(f"  Loaded data shape: {X_all.shape}")
-        print(f"  Participants: {len(np.unique(groups))}")
+        participant_features = {}
         
-        # Step 4: Run k-fold cross-validation with the custom suffix
-        print(f"Step 4: Running {k_folds}-fold cross-validation...")
-        cv_results = UpperBodyClassifier.k_fold_cross_validation(
-            out_root, datatype, event, results_dir, filtered_features,
-            k=k_folds, rf_n_jobs=rf_n_jobs, 
-            top_k=subset_name,
-            preloaded_data=(X_all, y_all, groups)
-        )
-        
-        # Step 5: Save minimal IMU configuration
-        config_path = os.path.join(results_dir, f"{event.replace(' ', '_')}_minimal_imu_config.json")
-        config = {
-            'event': event,
-            'imu_subset': imu_subset,
-            'subset_name': subset_name,
-            'num_features': len(filtered_features),
-            'features': filtered_features,
-            'cv_results': {
-                'overall_auc': float(cv_results['overall_auc']),
-                'cv_auc_mean': float(cv_results['cv_auc_mean']),
-                'cv_auc_std': float(cv_results['cv_auc_std']),
-                'accuracy': float(cv_results['accuracy']),
-                'f1_score': float(cv_results['f1_score'])
-            },
-            'training_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=4)
-        
-        print(f"\nSaved minimal IMU configuration: {config_path}")
-        print(f"\nResults Summary:")
-        print(f"  Overall AUC: {cv_results['overall_auc']:.4f}")
-        print(f"  CV AUC: {cv_results['cv_auc_mean']:.4f} ± {cv_results['cv_auc_std']:.4f}")
-        print(f"  Accuracy: {cv_results['accuracy']:.4f}")
-        print(f"  F1-Score: {cv_results['f1_score']:.4f}")
-        
-        # Cleanup
-        del X_all, y_all, groups
-        gc.collect()
-        
-        return cv_results
-    
-    @staticmethod
-    def batch_train_all_events(out_root, models_dir, results_root, 
-                               imu_subset_mapping, k_folds=5, 
-                               rf_n_jobs=1, loading_n_jobs=8):
-        """
-        Train minimal IMU classifiers for all events with specified IMU subsets.
-        """
-        os.makedirs(results_root, exist_ok=True)
-        
-        results_summary = []
-        
-        for event, imu_subset in imu_subset_mapping.items():
-            print(f"\n{'#'*80}")
-            print(f"Processing Event: {event}")
-            print(f"{'#'*80}")
+        for pid in all_pids:
+            print(f"Feature selection for participant {pid} (IMU subset: {imu_subset})...")
             
             try:
-                # Create results directory for this event
-                event_results_dir = os.path.join(
-                    results_root, event.replace(" ", "_")
-                )
-                os.makedirs(event_results_dir, exist_ok=True)
-                
-                # Train model
-                cv_results = MinimalIMUClassifier.train_minimal_imu_model(
-                    out_root, models_dir, event, imu_subset,
-                    event_results_dir, k_folds, rf_n_jobs, loading_n_jobs
+                # Load filtered data for this participant
+                X_participant, y_participant = MinimalIMUClassifier.load_features_for_participants_filtered(
+                    out_root, datatype, event, [pid], imu_subset, return_groups=False
                 )
                 
-                # Add to summary
-                results_summary.append({
-                    'event': event,
-                    'imu_subset': ', '.join(imu_subset),
-                    'num_imus': len(imu_subset),
-                    'overall_auc': cv_results['overall_auc'],
-                    'cv_auc_mean': cv_results['cv_auc_mean'],
-                    'cv_auc_std': cv_results['cv_auc_std'],
-                    'accuracy': cv_results['accuracy'],
-                    'f1_score': cv_results['f1_score'],
-                    'status': 'Success'
-                })
+                if X_participant.empty:
+                    print(f"  No data found for participant {pid} with IMU subset")
+                    continue
+                
+                # Use the exact same feature selection as full classifier
+                selector, X_train_sel, importances = UpperBodyClassifier.feature_selection(
+                    X_participant, y_participant, n_jobs=selector_n_jobs
+                )
+                
+                # Store the selected features and importances
+                participant_features[pid] = importances.to_dict()
+                
+                # Cleanup
+                del X_participant, y_participant, selector, X_train_sel, importances
+                gc.collect()
+                
+                print(f"  Selected {len(participant_features[pid])} features")
                 
             except Exception as e:
-                print(f"ERROR processing {event}: {e}")
-                results_summary.append({
-                    'event': event,
-                    'imu_subset': ', '.join(imu_subset),
-                    'num_imus': len(imu_subset),
-                    'overall_auc': None,
-                    'cv_auc_mean': None,
-                    'cv_auc_std': None,
-                    'accuracy': None,
-                    'f1_score': None,
-                    'status': f'Failed: {str(e)}'
-                })
+                print(f"Error processing participant {pid}: {e}")
                 continue
-            
-            # Cleanup between events
-            gc.collect()
         
-        # Save summary report
-        summary_df = pd.DataFrame(results_summary)
-        summary_path = os.path.join(results_root, "minimal_imu_training_summary.csv")
-        summary_df.to_csv(summary_path, index=False)
+        return participant_features
+    
+    @staticmethod
+    def lopo_pipeline_minimal_imu(out_root, datatype, event, imu_subset, results_dir,
+                                  selector_n_jobs=1, rf_n_jobs=1, k_folds=5,
+                                  top_k_values=[100],
+                                  loading_n_jobs=8, subset_name=None):
+        """
+        Run the complete LOPO pipeline for minimal IMU subset.
+        Identical to UpperBodyClassifier.lopo_pipeline but with filtered data loading.
+        """
+        os.makedirs(results_dir, exist_ok=True)
         
         print(f"\n{'='*80}")
-        print(f"Batch Training Complete!")
-        print(f"Summary saved to: {summary_path}")
+        print(f"LOPO Pipeline for Minimal IMU Classifier")
+        print(f"Event: {event}")
+        print(f"IMU Subset: {imu_subset}")
+        if subset_name:
+            print(f"Subset Name: {subset_name}")
         print(f"{'='*80}\n")
         
-        # Print summary table
-        print(summary_df.to_string(index=False))
+        # Step 1: Participant-level feature selection with filtered data
+        print(f"Step 1: Running participant-level feature selection for {datatype} - {event}")
+        participant_features = MinimalIMUClassifier.participant_level_feature_selection_filtered(
+            out_root, datatype, event, imu_subset, selector_n_jobs
+        )
         
-        return summary_df
+        if len(participant_features) < 3:
+            raise ValueError(f"Need at least 3 participants for feature selection. Found: {len(participant_features)}")
+        
+        # Step 2: Use UpperBodyClassifier's prevalence analysis (same logic)
+        print(f"Step 2: Analysing feature prevalence across participants")
+        top_k_results, master_ranking = UpperBodyClassifier.lopo_feature_prevalence_analysis(
+            participant_features, top_k_values
+        )
+        
+        # Step 3: Get participant list
+        base = os.path.join(out_root, datatype, event.replace(" ", "_"))
+        all_pids = list(participant_features.keys())
+        
+        # Step 4: Run CV for each top_k
+        results = {}
+        for top_k in top_k_values:
+            print(f"Step 4: Running {k_folds}-fold CV for top_{top_k}")
+            
+            results_dir_topk = os.path.join(results_dir, f"top_{top_k}")
+            os.makedirs(results_dir_topk, exist_ok=True)
+            
+            prevalence_features = top_k_results[f'top_{top_k}']
+            
+            # Save prevalence analysis
+            top_k_prevalent = master_ranking[:top_k]
+            prevalence_analysis = []
+            for feature, prevalence, max_importance in top_k_prevalent:
+                prevalence_analysis.append({
+                    'feature': feature,
+                    'prevalence': prevalence,
+                    'prevalence_percentage': (prevalence / len(all_pids)) * 100,
+                    'max_importance': max_importance,
+                    'appeared_in_iterations': f"{prevalence}/{len(all_pids)}"
+                })
+            
+            prevalence_df = pd.DataFrame(prevalence_analysis)
+            prevalence_analysis_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_analysis.csv")
+            prevalence_df.to_csv(prevalence_analysis_path, index=False)
+            
+            # Save feature list
+            prevalence_importances = {
+                feature: max_importance for feature, _, max_importance in top_k_prevalent
+            }
+            prevalence_path = os.path.join(results_dir_topk, f"{datatype}_{event}_prevalence_top{top_k}_features.json")
+            with open(prevalence_path, 'w') as outfile:
+                json.dump(prevalence_importances, outfile, indent=4)
+            
+            # Load filtered data for CV
+            print(f"Loading data with only {len(prevalence_features)} selected features from IMU subset...")
+            X_all, y_all, groups = MinimalIMUClassifier.load_features_for_participants_filtered(
+                out_root, datatype, event, all_pids, imu_subset, 
+                return_groups=True, n_jobs_loading=loading_n_jobs
+            )
+            
+            # Filter to only prevalence features
+            available_features = [f for f in prevalence_features if f in X_all.columns]
+            X_all = X_all[available_features]
+            
+            print(f"Filtered data shape: {X_all.shape}")
+            
+            # Use suffix that includes subset name if provided
+            cv_suffix = f"{subset_name}_top{top_k}" if subset_name else f"top{top_k}"
+            
+            # Run k-fold CV using UpperBodyClassifier's method
+            cv_results = UpperBodyClassifier.k_fold_cross_validation(
+                out_root, datatype, event, results_dir_topk, available_features,
+                k_folds, rf_n_jobs, top_k=cv_suffix,
+                preloaded_data=(X_all, y_all, groups)
+            )
+            
+            results[f'top_{top_k}'] = {
+                'features': available_features,
+                'cv_results': cv_results
+            }
+            
+            # Cleanup
+            del X_all, y_all, groups
+            gc.collect()
+        
+        return results
 
 
 if __name__ == "__main__":
     
     # Configuration
     out_root = "/hpc/vlee669/Results/30 Participants/features"
-    models_root = "/hpc/vlee669/Results/30 Participants/models"
     results_root = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"
     
     # Core allocation
-    import multiprocessing
     total_cores = multiprocessing.cpu_count()
     print(f"Total available cores: {total_cores}")
     half_cores = max(1, total_cores // 2)
     
     loading_n_jobs = min(16, half_cores)
-    rf_n_jobs = half_cores
+    selector_n_jobs = half_cores
+    rf_n_jobs = 16
     
     print(f"Core allocation:")
     print(f"  Loading: {loading_n_jobs} cores")
+    print(f"  Feature Selection: {selector_n_jobs} cores")
     print(f"  Random Forest: {rf_n_jobs} cores")
     
     # Define the event you want to train
-    event = "Straight walk"
+    event = "Dribbling basketball"
+    datatype = "IMU"
     
     # Define both IMU subsets to test
     imu_subsets = {
@@ -254,40 +344,49 @@ if __name__ == "__main__":
         print(f"Training with {subset_name}: {imu_subset}")
         print(f"{'='*80}\n")
         
-        # Create results directory for this subset
         subset_results_dir = os.path.join(
-            results_root, 
-            event.replace(" ", "_"), 
+            results_root,
+            event.replace(" ", "_"),
             subset_name
         )
         os.makedirs(subset_results_dir, exist_ok=True)
         
         try:
-            cv_results = MinimalIMUClassifier.train_minimal_imu_model(
+            # Run complete pipeline
+            results = MinimalIMUClassifier.lopo_pipeline_minimal_imu(
                 out_root=out_root,
-                models_dir=models_root,
+                datatype=datatype,
                 event=event,
                 imu_subset=imu_subset,
                 results_dir=subset_results_dir,
-                k_folds=5,
+                selector_n_jobs=selector_n_jobs,
                 rf_n_jobs=rf_n_jobs,
+                k_folds=5,
+                top_k_values=[100],
                 loading_n_jobs=loading_n_jobs,
                 subset_name=subset_name
             )
+            
+            # Store top 100 results for comparison
+            top_100_results = results['top_100']['cv_results']
+            
+            # Extract metrics from sklearn_classification_report
+            sklearn_report = top_100_results['sklearn_classification_report']
             
             results_comparison.append({
                 'subset_name': subset_name,
                 'imus': ', '.join(imu_subset),
                 'num_imus': len(imu_subset),
-                'overall_auc': cv_results['overall_auc'],
-                'cv_auc_mean': cv_results['cv_auc_mean'],
-                'cv_auc_std': cv_results['cv_auc_std'],
-                'accuracy': cv_results['accuracy'],
-                'f1_score': cv_results['f1_score']
+                'overall_auc': top_100_results['overall_auc'],
+                'cv_auc_mean': top_100_results['cv_auc_mean'],
+                'cv_auc_std': top_100_results['cv_auc_std'],
+                'accuracy': sklearn_report['accuracy'],
+                'f1_score': sklearn_report['weighted avg']['f1-score']
             })
             
         except Exception as e:
-            print(f"\nTraining failed for {subset_name}: {e}")
+            print(f"\nPipeline failed for {subset_name}: {e}")
+            traceback.print_exc()
             results_comparison.append({
                 'subset_name': subset_name,
                 'imus': ', '.join(imu_subset),
@@ -303,7 +402,7 @@ if __name__ == "__main__":
     # Save comparison report
     comparison_df = pd.DataFrame(results_comparison)
     comparison_path = os.path.join(
-        results_root, 
+        results_root,
         f"{event.replace(' ', '_')}_imu_subset_comparison.csv"
     )
     comparison_df.to_csv(comparison_path, index=False)
