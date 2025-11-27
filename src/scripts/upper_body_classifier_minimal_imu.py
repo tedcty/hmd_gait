@@ -370,9 +370,7 @@ if __name__ == "__main__":
             # Store top 100 results for comparison
             top_100_results = results['top_100']['cv_results']
             
-            # Extract metrics from sklearn_classification_report
-            sklearn_report = top_100_results['sklearn_classification_report']
-            
+            # Metrics are already at the top level of cv_results
             results_comparison.append({
                 'subset_name': subset_name,
                 'imus': ', '.join(imu_subset),
@@ -380,8 +378,8 @@ if __name__ == "__main__":
                 'overall_auc': top_100_results['overall_auc'],
                 'cv_auc_mean': top_100_results['cv_auc_mean'],
                 'cv_auc_std': top_100_results['cv_auc_std'],
-                'accuracy': sklearn_report['accuracy'],
-                'f1_score': sklearn_report['weighted avg']['f1-score']
+                'accuracy': top_100_results['accuracy'],
+                'f1_score': top_100_results['f1_score']
             })
             
         except Exception as e:
