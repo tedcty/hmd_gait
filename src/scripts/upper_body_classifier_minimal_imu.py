@@ -330,7 +330,8 @@ if __name__ == "__main__":
     # Define both IMU subsets to test
     imu_subsets = {
         "minimal_analysis": ["LeftHand_imu", "RightHand_imu"],  # Based on analysis (normalised sum of importance scores)
-        "product_usecase": ["Head_imu", "LeftHand_imu"]         # Based on product use-case considerations
+        "product_usecase_left": ["Head_imu", "LeftForeArm_imu"],   # Based on product use-case considerations
+        "product_usecase_right": ["Head_imu", "RightForeArm_imu"]   # Another product use-case
     }
     
     print(f"\nTraining event: {event}")
