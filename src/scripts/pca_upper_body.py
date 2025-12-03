@@ -570,6 +570,55 @@ class NormativePCAModel:
             'fold_results': fold_results
         }
 
+def aggregate_loadings(cv_dir, datatype, event_filename, condition, n_top_features=10):
+    """
+    Average loadings across folds and identify top features per PC.
+    """
+    # Load all fold loadings
+    fold_loadings = []
+    for fold_idx in range(5):
+        loadings_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_loadings.csv")
+        if os.path.exists(loadings_path):
+            fold_loadings.append(pd.read_csv(loadings_path, index_col=0))
+    
+    # Average across folds
+    mean_loadings = pd.concat(fold_loadings).groupby(level=0).mean()
+    std_loadings = pd.concat(fold_loadings).groupby(level=0).std()
+    
+    # Get top features for each PC
+    top_features_per_pc = {}
+    for pc_col in mean_loadings.columns[:3]:  # First 3 PCs
+        # Sort by absolute loading value
+        sorted_features = mean_loadings[pc_col].abs().sort_values(ascending=False)
+        top_features_per_pc[pc_col] = sorted_features.head(n_top_features)
+    
+    return mean_loadings, std_loadings, top_features_per_pc
+
+def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition):
+    """
+    Aggregate reconstruction errors from all test participants across folds.
+    """
+    all_errors = []
+    
+    for fold_idx in range(5):
+        metrics_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_test_variance_metrics.csv")
+        if os.path.exists(metrics_path):
+            df = pd.read_csv(metrics_path)
+            all_errors.append(df)
+    
+    # Combine all test participants
+    combined = pd.concat(all_errors, ignore_index=True)
+    
+    # Calculate statistics
+    stats = {
+        'mean_reconstruction_error': combined['Reconstruction_Error'].mean(),
+        'std_reconstruction_error': combined['Reconstruction_Error'].std(),
+        'median_reconstruction_error': combined['Reconstruction_Error'].median(),
+        'mean_variance_captured': combined['Variance_Captured'].mean(),
+        'std_variance_captured': combined['Variance_Captured'].std()
+    }
+    
+    return combined, stats
 
 if __name__ == "__main__":
     # Set up paths
@@ -629,3 +678,228 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print(f"CV-based PCA model creation completed for all event-condition combinations.")
     print(f"Results saved to {results_dir}/pca_models/")
+    
+    # Aggregate loadings and reconstruction errors across folds
+    print(f"\n{'='*60}")
+    print("AGGREGATING LOADINGS AND RECONSTRUCTION ERRORS ACROSS FOLDS")
+    print(f"{'='*60}\n")
+    
+    for event_condition in available_data.keys():
+        print(f"\n{'='*50}")
+        print(f"Aggregating results for: {event_condition}")
+        
+        # Parse event and condition
+        parts = event_condition.split()
+        condition = parts[-1]
+        event = " ".join(parts[:-1])
+        event_filename = event.replace(' ', '_')
+        
+        cv_dir = os.path.join(results_dir, "pca_models", event_filename, condition, "top100_cv")
+        
+        if not os.path.exists(cv_dir):
+            print(f"  Skipping - CV directory not found: {cv_dir}")
+            continue
+        
+        try:
+            # 1. Aggregate loadings
+            print(f"  Aggregating loadings...")
+            mean_loadings, std_loadings, top_features_per_pc = aggregate_loadings(
+                cv_dir, datatype, event_filename, condition, n_top_features=10
+            )
+            
+            # Save mean loadings
+            mean_loadings_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_mean_loadings.csv")
+            mean_loadings.to_csv(mean_loadings_path)
+            print(f"  Saved mean loadings to: {mean_loadings_path}")
+            
+            # Save std loadings
+            std_loadings_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_std_loadings.csv")
+            std_loadings.to_csv(std_loadings_path)
+            print(f"  Saved std loadings to: {std_loadings_path}")
+            
+            # Save top features per PC
+            top_features_summary = []
+            for pc_name, top_feats in top_features_per_pc.items():
+                for rank, (feature, loading) in enumerate(top_feats.items(), 1):
+                    top_features_summary.append({
+                        'PC': pc_name,
+                        'Rank': rank,
+                        'Feature': feature,
+                        'Mean_Abs_Loading': loading,
+                        'Mean_Loading': mean_loadings.loc[feature, pc_name],
+                        'Std_Loading': std_loadings.loc[feature, pc_name]
+                    })
+            
+            top_features_df = pd.DataFrame(top_features_summary)
+            top_features_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_top_features_per_pc.csv")
+            top_features_df.to_csv(top_features_path, index=False)
+            print(f"  Saved top features per PC to: {top_features_path}")
+            
+            # 2. Aggregate reconstruction errors
+            print(f"  Aggregating reconstruction errors...")
+            combined_errors, error_stats = aggregate_reconstruction_errors(
+                cv_dir, datatype, event_filename, condition
+            )
+            
+            # Save combined errors (all test participants)
+            combined_errors_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_all_test_errors.csv")
+            combined_errors.to_csv(combined_errors_path, index=False)
+            print(f"  Saved all test errors to: {combined_errors_path}")
+            
+            # Save error statistics summary
+            error_stats_df = pd.DataFrame([error_stats])
+            error_stats_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_error_summary.csv")
+            error_stats_df.to_csv(error_stats_path, index=False)
+            print(f"  Saved error summary to: {error_stats_path}")
+            
+            # Create reconstruction error visualization
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+            
+            # Histogram of reconstruction errors
+            ax1.hist(combined_errors['Reconstruction_Error'], bins=30, edgecolor='black', alpha=0.7)
+            ax1.axvline(error_stats['mean_reconstruction_error'], color='red', linestyle='--', linewidth=2, label='Mean')
+            ax1.axvline(error_stats['median_reconstruction_error'], color='orange', linestyle='--', linewidth=2, label='Median')
+            ax1.set_xlabel('Reconstruction Error')
+            ax1.set_ylabel('Frequency')
+            ax1.set_title(f'Reconstruction Error Distribution\n{event_condition}')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Box plot by participant
+            unique_participants = combined_errors['Participant'].unique()
+            if len(unique_participants) > 1:
+                participant_errors = [combined_errors[combined_errors['Participant'] == p]['Reconstruction_Error'].values 
+                                    for p in unique_participants]
+                ax2.boxplot(participant_errors, labels=unique_participants)
+                ax2.set_xlabel('Participant')
+                ax2.set_ylabel('Reconstruction Error')
+                ax2.set_title(f'Reconstruction Error by Participant\n{event_condition}')
+                ax2.tick_params(axis='x', rotation=45)
+                ax2.grid(True, alpha=0.3)
+            else:
+                ax2.text(0.5, 0.5, 'Only one participant\nin test set', 
+                        ha='center', va='center', transform=ax2.transAxes)
+                ax2.set_title(f'Reconstruction Error by Participant\n{event_condition}')
+            
+            plt.tight_layout()
+            error_plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_reconstruction_errors.png")
+            plt.savefig(error_plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  Saved error visualization to: {error_plot_path}")
+            
+            # Print summary statistics
+            print(f"  Summary Statistics:")
+            print(f"    Mean Reconstruction Error: {error_stats['mean_reconstruction_error']:.4f} ± {error_stats['std_reconstruction_error']:.4f}")
+            print(f"    Median Reconstruction Error: {error_stats['median_reconstruction_error']:.4f}")
+            print(f"    Mean Variance Captured: {error_stats['mean_variance_captured']:.4f} ± {error_stats['std_variance_captured']:.4f}")
+            print(f"    Total Test Samples: {len(combined_errors)}")
+            
+        except Exception as e:
+            print(f"  Error aggregating results for {event_condition}: {e}")
+            traceback.print_exc()
+            continue
+    
+    # === NEW: Train final PCA models on whole dataset ===
+    print(f"\n{'='*60}")
+    print("TRAINING FINAL PCA MODELS ON WHOLE DATASET")
+    print(f"{'='*60}\n")
+    
+    for event_condition in available_data.keys():
+        print(f"\n{'='*50}")
+        print(f"Training final model for: {event_condition}")
+        
+        # Parse event and condition
+        parts = event_condition.split()
+        condition = parts[-1]
+        event = " ".join(parts[:-1])
+        event_filename = event.replace(' ', '_')
+        
+        # Create pc_model directory
+        pc_model_dir = os.path.join(results_dir, "pca_models", event_filename, condition, "pc_model")
+        os.makedirs(pc_model_dir, exist_ok=True)
+        
+        try:
+            # Load top features
+            top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
+            
+            # Get all participants for this event-condition
+            all_participants = available_data[event_condition]
+            print(f"  Training on all {len(all_participants)} participants")
+            
+            # Load all data (event windows only)
+            X_all, y_all, groups_all, feature_names = NormativePCAModel.load_event_condition_data(
+                out_root, datatype, event_condition, all_participants, top_features, filter_event_only=True
+            )
+            
+            if len(X_all) == 0:
+                print(f"  Warning: No data available for {event_condition}")
+                continue
+            
+            print(f"  Total samples: {len(X_all)}")
+            print(f"  Total features: {len(feature_names)}")
+            
+            # Build PCA model
+            print("  Building PCA model...")
+            pca = PCA()
+            pca.setData(X_all.values.T)  # Transpose to (features, samples)
+            pca.inc_svd_decompose(None)  # Use all components
+            pc = pca.PC
+            
+            # Save model in both formats
+            outname = f"{datatype}_{event_filename}_{condition}"
+            
+            # Save .pc format
+            pc_path = os.path.join(pc_model_dir, outname)
+            pc.save(pc_path)
+            print(f"  Saved .pc model to: {pc_path}")
+            
+            # Save .mat format
+            mat_path = os.path.join(pc_model_dir, f"{outname}.mat")
+            pc.savemat(mat_path)
+            print(f"  Saved .mat model to: {mat_path}")
+            
+            # Also save the explained variance for the final model
+            if hasattr(pc, 'explained_variance_ratio_') and pc.explained_variance_ratio_ is not None:
+                evr = np.array(pc.explained_variance_ratio_, dtype=float)
+            else:
+                evr = np.array(pc.getNormSpectrum(), dtype=float)
+            
+            cum_var = evr.cumsum()
+            
+            ev_data = []
+            for i in range(len(evr)):
+                ev_data.append({
+                    'Component': i + 1,
+                    'Explained_Variance_Ratio': evr[i],
+                    'Cumulative_Variance': cum_var[i]
+                })
+            
+            ev_df = pd.DataFrame(ev_data)
+            ev_path = os.path.join(pc_model_dir, f"{outname}_explained_variance.csv")
+            ev_df.to_csv(ev_path, index=False)
+            print(f"  Saved explained variance to: {ev_path}")
+            
+            # Save loadings
+            loadings_df = pd.DataFrame(
+                pc.modes, 
+                index=feature_names, 
+                columns=[f"PC{i+1}" for i in range(pc.modes.shape[1])]
+            )
+            loadings_path = os.path.join(pc_model_dir, f"{outname}_loadings.csv")
+            loadings_df.to_csv(loadings_path)
+            print(f"  Saved loadings to: {loadings_path}")
+            
+            print(f"  Done training final model for {event_condition}")
+            print(f"  Model has {pc.modes.shape[1]} components")
+            print(f"  Total variance explained: {cum_var[-1]:.4f} ({cum_var[-1]*100:.2f}%)")
+            
+        except Exception as e:
+            print(f"  Error training final model for {event_condition}: {e}")
+            traceback.print_exc()
+            continue
+    
+    print(f"\n{'='*60}")
+    print(f"CV-based PCA model creation and aggregation completed.")
+    print(f"Final models saved to {results_dir}/pca_models/*/pc_model/")
+    print(f"Results saved to {results_dir}/pca_models/")
+    print(f"{'='*60}")
