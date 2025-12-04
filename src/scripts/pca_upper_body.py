@@ -531,29 +531,35 @@ class NormativePCAModel:
         agg_df.to_csv(agg_path, index=False)
         print(f"Saved aggregated results to {agg_path}")
         
-        # Create visualization of aggregated results
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        # Create visualisation of aggregated results
+        fig, ax = plt.subplots(1, 1, figsize=(12, 6))
         
-        # Plot 1: Explained variance with error bars
         components = np.arange(1, max_components + 1)
-        ax1.errorbar(components, evr_mean * 100, yerr=evr_std * 100, 
-                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=6)
-        ax1.set_xlabel("Principal Component")
-        ax1.set_ylabel("Explained Variance (%)")
-        ax1.set_title(f"Explained Variance (Mean ± SD)\n{event_condition} - 5-Fold CV")
-        ax1.grid(True, alpha=0.3)
         
-        # Plot 2: Cumulative variance with error bars
-        ax2.errorbar(components, cum_mean * 100, yerr=cum_std * 100,
-                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=6)
-        ax2.set_xlabel("Number of Principal Components")
-        ax2.set_ylabel("Cumulative Explained Variance (%)")
-        ax2.set_title(f"Cumulative Explained Variance (Mean ± SD)\n{event_condition} - 5-Fold CV")
-        ax2.grid(True, alpha=0.3)
+        # Bar plot for explained variance
+        ax.bar(components, evr_mean * 100, yerr=evr_std * 100, 
+               color='green', alpha=0.7, capsize=5, 
+               error_kw={'elinewidth': 2, 'capthick': 2},
+               label='Explained Variance')
+        
+        # Line plot for cumulative variance
+        ax.errorbar(components, cum_mean * 100, yerr=cum_std * 100,
+                   color='red', marker='o', markersize=8, linewidth=2.5,
+                   capsize=5, capthick=2, elinewidth=2,
+                   label='Cumulative Variance')
+        
+        ax.set_xlabel("Principal Component", fontsize=12)
+        ax.set_ylabel("Variance (%)", fontsize=12)
+        ax.set_title(f"PCA Variance Analysis (Mean ± SD)\n{event_condition} - 5-Fold CV", fontsize=14)
+        ax.legend(loc='best', fontsize=11)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # Set x-axis to show integer component numbers
+        ax.set_xticks(components)
         
         plt.tight_layout()
         plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_explained_variance.png")
-        plt.savefig(plot_path, dpi=300)
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Saved aggregated plot to {plot_path}")
         
@@ -752,7 +758,7 @@ if __name__ == "__main__":
             error_stats_df.to_csv(error_stats_path, index=False)
             print(f"  Saved error summary to: {error_stats_path}")
             
-            # Create reconstruction error visualization
+            # Create reconstruction error visualisation
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
             
             # Histogram of reconstruction errors
@@ -785,7 +791,7 @@ if __name__ == "__main__":
             error_plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_reconstruction_errors.png")
             plt.savefig(error_plot_path, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"  Saved error visualization to: {error_plot_path}")
+            print(f"  Saved error visualisation to: {error_plot_path}")
             
             # Print summary statistics
             print(f"  Summary Statistics:")
