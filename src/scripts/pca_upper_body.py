@@ -544,15 +544,25 @@ class NormativePCAModel:
         
         components = np.arange(1, max_components + 1)
         
+        # Determine bar color based on condition
+        if condition == 'Normal':
+            bar_color = 'blue'
+        elif condition == 'AR':
+            bar_color = 'green'
+        elif condition == 'VR':
+            bar_color = 'red'
+        else:
+            bar_color = 'gray'  # Fallback for unknown conditions
+        
         # Bar plot for explained variance
         ax.bar(components, evr_mean * 100, yerr=evr_std * 100, 
-               color='green', alpha=0.7, capsize=5, 
+               color=bar_color, alpha=0.7, capsize=5, 
                error_kw={'elinewidth': 2, 'capthick': 2},
                label='Explained Variance')
         
         # Line plot for cumulative variance
         ax.errorbar(components, cum_mean * 100, yerr=cum_std * 100,
-                   color='red', marker='o', markersize=8, linewidth=2.5,
+                   color='black', marker='o', markersize=8, linewidth=2.5,
                    capsize=5, capthick=2, elinewidth=2,
                    label='Cumulative Variance')
         
