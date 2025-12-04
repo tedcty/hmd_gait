@@ -568,7 +568,6 @@ class NormativePCAModel:
         
         ax.set_xlabel("Principal Component", fontsize=12)
         ax.set_ylabel("Variance (%)", fontsize=12)
-        ax.set_title(f"PCA Variance Analysis (Mean ± SD)\n{event_condition} - 5-Fold CV", fontsize=14)
         ax.legend(loc='best', fontsize=11)
         ax.grid(True, alpha=0.3, axis='y')
         
@@ -787,7 +786,6 @@ if __name__ == "__main__":
             ax1.axvline(error_stats['median_reconstruction_error'], color='orange', linestyle='--', linewidth=2, label='Median')
             ax1.set_xlabel('Reconstruction Error')
             ax1.set_ylabel('Frequency')
-            ax1.set_title(f'Reconstruction Error Distribution\n{event_condition}')
             ax1.legend()
             ax1.grid(True, alpha=0.3)
             
@@ -799,13 +797,11 @@ if __name__ == "__main__":
                 ax2.boxplot(participant_errors, labels=unique_participants)
                 ax2.set_xlabel('Participant')
                 ax2.set_ylabel('Reconstruction Error')
-                ax2.set_title(f'Reconstruction Error by Participant\n{event_condition}')
                 ax2.tick_params(axis='x', rotation=45)
                 ax2.grid(True, alpha=0.3)
             else:
                 ax2.text(0.5, 0.5, 'Only one participant\nin test set', 
                         ha='center', va='center', transform=ax2.transAxes)
-                ax2.set_title(f'Reconstruction Error by Participant\n{event_condition}')
             
             plt.tight_layout()
             error_plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_reconstruction_errors.png")
@@ -914,6 +910,20 @@ if __name__ == "__main__":
             loadings_path = os.path.join(pc_model_dir, f"{outname}_loadings.csv")
             loadings_df.to_csv(loadings_path)
             print(f"  Saved loadings to: {loadings_path}")
+            
+            # Project all data into final PCA space
+            all_scores = pc.project(X_all.values.T).T  # (samples, components)
+
+            # Save final model projection scores
+            all_scores_df = pd.DataFrame(
+                all_scores,
+                columns=[f"PC{i+1}" for i in range(all_scores.shape[1])]
+            )
+            all_scores_df.insert(0, 'Participant', groups_all)
+
+            scores_path = os.path.join(pc_model_dir, f"{outname}_scores.csv")
+            all_scores_df.to_csv(scores_path, index=False)
+            print(f"  Saved PCA scores to: {scores_path}")
             
             print(f"  Done training final model for {event_condition}")
             print(f"  Model has {pc.modes.shape[1]} components")
