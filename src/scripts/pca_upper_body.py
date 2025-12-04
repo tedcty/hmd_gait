@@ -36,7 +36,7 @@ class NormativePCAModel:
                     if os.path.isdir(participant_path):
                         
                         # Look through all IMU locations for this participant
-                        for imu_location in os.listdir(participant_dir):
+                        for imu_location in os.listdir(participant_path):
                             imu_path = os.path.join(participant_path, imu_location)
                             if os.path.isdir(imu_path):
                                 
