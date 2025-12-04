@@ -36,7 +36,7 @@ class NormativePCAModel:
                     if os.path.isdir(participant_path):
                         
                         # Look through all IMU locations for this participant
-                        for imu_location in os.listdir(participant_path):
+                        for imu_location in os.listdir(participant_dir):
                             imu_path = os.path.join(participant_path, imu_location)
                             if os.path.isdir(imu_path):
                                 
@@ -307,7 +307,7 @@ class NormativePCAModel:
 
     @staticmethod
     def create_normative_pca_models_cv(out_root, datatype, event_condition, results_dir, 
-                                       n_components=None, folds_json_path=None):
+                                       n_components=None, folds_base_dir=None):
         """
         Create normative PCA models using 5-fold cross-validation across participants.
         
@@ -341,6 +341,14 @@ class NormativePCAModel:
         
         all_participants = available_data[event_condition]
         print(f"Total participants available: {len(all_participants)}")
+        
+        # Determine event-specific folds JSON path
+        folds_json_path = None
+        if folds_base_dir:
+            folds_json_path = os.path.join(folds_base_dir, f"{event_filename}_folds.json")
+            if not os.path.exists(folds_json_path):
+                print(f"Event-specific folds file not found: {folds_json_path}")
+                folds_json_path = None
         
         # Get CV folds
         folds = NormativePCAModel.get_cv_folds(all_participants, k=5, folds_json_path=folds_json_path)
@@ -640,11 +648,13 @@ if __name__ == "__main__":
     
     print("Running in CROSS-VALIDATION mode")
     
-    # Path to pre-defined folds (if available)
-    folds_json_path = os.path.join(results_dir, "classifier_folds.json")
-    if not os.path.exists(folds_json_path):
-        folds_json_path = None
-        print("No pre-defined folds found; will use deterministic split")
+    # Path to directory containing event-specific fold JSON files
+    folds_base_dir = os.path.join(results_dir, "cv_folds")
+    if not os.path.exists(folds_base_dir):
+        folds_base_dir = None
+        print("No event-specific folds directory found; will use deterministic split for all events")
+    else:
+        print(f"Using event-specific folds from: {folds_base_dir}")
     
     # Get all available event-condition combinations
     available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
@@ -669,7 +679,7 @@ if __name__ == "__main__":
         try:
             cv_result = NormativePCAModel.create_normative_pca_models_cv(
                 out_root, datatype, event_condition, results_dir, 
-                n_components=n_components, folds_json_path=folds_json_path
+                n_components=n_components, folds_base_dir=folds_base_dir
             )
             
             if cv_result:
