@@ -777,34 +777,45 @@ if __name__ == "__main__":
             error_stats_df.to_csv(error_stats_path, index=False)
             print(f"  Saved error summary to: {error_stats_path}")
             
-            # Create reconstruction error visualisation
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+            # Create reconstruction error visualisation (box plot with percentage error)
+            # Calculate percentage error
+            combined_errors['Original_Magnitude'] = np.sqrt(
+                combined_errors['Variance_Captured'] + combined_errors['Reconstruction_Error']**2
+            )
+            combined_errors['Percentage_Error'] = (
+                combined_errors['Reconstruction_Error'] / combined_errors['Original_Magnitude']
+            ) * 100
             
-            # Histogram of reconstruction errors
-            ax1.hist(combined_errors['Reconstruction_Error'], bins=30, edgecolor='black', alpha=0.7)
-            ax1.axvline(error_stats['mean_reconstruction_error'], color='red', linestyle='--', linewidth=2, label='Mean')
-            ax1.axvline(error_stats['median_reconstruction_error'], color='orange', linestyle='--', linewidth=2, label='Median')
-            ax1.set_xlabel('Reconstruction Error')
-            ax1.set_ylabel('Frequency')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
+            # Get per-participant mean percentage errors
+            per_participant = (
+                combined_errors.groupby("Participant")["Percentage_Error"]
+                  .mean()
+                  .values
+            )
             
-            # Box plot by participant
-            unique_participants = combined_errors['Participant'].unique()
-            if len(unique_participants) > 1:
-                participant_errors = [combined_errors[combined_errors['Participant'] == p]['Reconstruction_Error'].values 
-                                    for p in unique_participants]
-                ax2.boxplot(participant_errors, labels=unique_participants)
-                ax2.set_xlabel('Participant')
-                ax2.set_ylabel('Reconstruction Error')
-                ax2.tick_params(axis='x', rotation=45)
-                ax2.grid(True, alpha=0.3)
-            else:
-                ax2.text(0.5, 0.5, 'Only one participant\nin test set', 
-                        ha='center', va='center', transform=ax2.transAxes)
+            # Create box plot
+            fig, ax = plt.subplots(figsize=(8, 4))
+            
+            bp = ax.boxplot(
+                [per_participant],
+                widths=0.25,
+                patch_artist=True,
+                showfliers=False,
+                boxprops=dict(facecolor="#3182BD", color="black", linewidth=1.2),
+                medianprops=dict(color="black", linewidth=1.2),
+                whiskerprops=dict(color="black", linewidth=1.2),
+                capprops=dict(color="black", linewidth=1.2),
+            )
+            
+            # Axes formatting
+            ax.set_xticks([1])
+            ax.set_xticklabels([condition])
+            ax.set_xlabel("Condition", fontsize=12)
+            ax.set_ylabel("Reconstruction Error (%)", fontsize=12)
+            ax.grid(axis="y", alpha=0.3)
             
             plt.tight_layout()
-            error_plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_reconstruction_errors.png")
+            error_plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_recon_error.png")
             plt.savefig(error_plot_path, dpi=300, bbox_inches='tight')
             plt.close()
             print(f"  Saved error visualisation to: {error_plot_path}")
