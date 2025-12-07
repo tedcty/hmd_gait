@@ -36,7 +36,7 @@ class NormativePCAModel:
                     if os.path.isdir(participant_path):
                         
                         # Look through all IMU locations for this participant
-                        for imu_location in os.listdir(participant_path):
+                        for imu_location in os.listdir(participant_dir):
                             imu_path = os.path.join(participant_path, imu_location)
                             if os.path.isdir(imu_path):
                                 
@@ -593,9 +593,23 @@ class NormativePCAModel:
             'fold_results': fold_results
         }
 
-def aggregate_loadings(cv_dir, datatype, event_filename, condition, n_top_features=10):
+def aggregate_loadings(cv_dir, datatype, event_filename, condition, n_top_features=10, variance_threshold=0.90):
     """
-    Average loadings across folds and identify top features per PC.
+    Average loadings across folds and identify top features from PCs that cumulatively 
+    explain at least 90% of variance.
+    
+    Args:
+        cv_dir: Directory containing CV results
+        datatype: Data type (e.g., 'IMU')
+        event_filename: Event name formatted for filenames
+        condition: Condition name (e.g., 'Normal', 'AR', 'VR')
+        n_top_features: Number of top features to return
+        variance_threshold: Cumulative variance threshold (default 0.90 for 90%)
+    
+    Returns:
+        mean_loadings: Mean loadings across folds
+        std_loadings: Standard deviation of loadings across folds
+        top_features_dict: Dictionary of top features with their PC and loading info
     """
     # Load all fold loadings
     fold_loadings = []
@@ -608,14 +622,52 @@ def aggregate_loadings(cv_dir, datatype, event_filename, condition, n_top_featur
     mean_loadings = pd.concat(fold_loadings).groupby(level=0).mean()
     std_loadings = pd.concat(fold_loadings).groupby(level=0).std()
     
-    # Get top features for each PC
-    top_features_per_pc = {}
-    for pc_col in mean_loadings.columns[:3]:  # First 3 PCs
-        # Sort by absolute loading value
-        sorted_features = mean_loadings[pc_col].abs().sort_values(ascending=False)
-        top_features_per_pc[pc_col] = sorted_features.head(n_top_features)
+    # Load aggregated explained variance to determine which PCs to use
+    agg_var_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_aggregated_explained_variance.csv")
+    if os.path.exists(agg_var_path):
+        agg_var_df = pd.read_csv(agg_var_path)
+        
+        # Find PCs that cumulatively explain >= variance_threshold
+        cumulative_variance = agg_var_df['Cum_mean'].values
+        n_pcs_for_threshold = np.searchsorted(cumulative_variance, variance_threshold) + 1
+        n_pcs_for_threshold = min(n_pcs_for_threshold, len(mean_loadings.columns))
+        
+        print(f"    Using first {n_pcs_for_threshold} PCs to reach {variance_threshold*100:.0f}% explained variance")
+        print(f"    Cumulative variance: {cumulative_variance[n_pcs_for_threshold-1]*100:.2f}%")
+        
+        selected_pcs = mean_loadings.columns[:n_pcs_for_threshold]
+    else:
+        # Fallback: use first 3 PCs if variance file not found
+        print(f"    Warning: Aggregated variance file not found, defaulting to first 3 PCs")
+        selected_pcs = mean_loadings.columns[:3]
     
-    return mean_loadings, std_loadings, top_features_per_pc
+    # Collect all features from selected PCs with their maximum absolute loading
+    feature_max_loadings = {}
+    feature_pc_map = {}  # Track which PC has the max loading for each feature
+    
+    for pc_col in selected_pcs:
+        for feature in mean_loadings.index:
+            abs_loading = abs(mean_loadings.loc[feature, pc_col])
+            if feature not in feature_max_loadings or abs_loading > feature_max_loadings[feature]:
+                feature_max_loadings[feature] = abs_loading
+                feature_pc_map[feature] = pc_col
+    
+    # Sort features by their maximum absolute loading and take top N
+    sorted_features = sorted(feature_max_loadings.items(), key=lambda x: x[1], reverse=True)
+    top_features = sorted_features[:n_top_features]
+    
+    # Create summary dictionary
+    top_features_dict = {}
+    for feature, max_abs_loading in top_features:
+        pc_col = feature_pc_map[feature]
+        top_features_dict[feature] = {
+            'pc': pc_col,
+            'max_abs_loading': max_abs_loading,
+            'mean_loading': mean_loadings.loc[feature, pc_col],
+            'std_loading': std_loadings.loc[feature, pc_col]
+        }
+    
+    return mean_loadings, std_loadings, top_features_dict
 
 def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition):
     """
@@ -744,16 +796,15 @@ if __name__ == "__main__":
             
             # Save top features per PC
             top_features_summary = []
-            for pc_name, top_feats in top_features_per_pc.items():
-                for rank, (feature, loading) in enumerate(top_feats.items(), 1):
-                    top_features_summary.append({
-                        'PC': pc_name,
-                        'Rank': rank,
-                        'Feature': feature,
-                        'Mean_Abs_Loading': loading,
-                        'Mean_Loading': mean_loadings.loc[feature, pc_name],
-                        'Std_Loading': std_loadings.loc[feature, pc_name]
-                    })
+            for rank, (feature, info) in enumerate(top_features_per_pc.items(), 1):
+                top_features_summary.append({
+                    'Rank': rank,
+                    'Feature': feature,
+                    'PC': info['pc'],
+                    'Mean_Abs_Loading': info['max_abs_loading'],
+                    'Mean_Loading': info['mean_loading'],
+                    'Std_Loading': info['std_loading']
+                })
             
             top_features_df = pd.DataFrame(top_features_summary)
             top_features_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_top_features_per_pc.csv")
