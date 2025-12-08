@@ -146,9 +146,9 @@ class NormativePCAModel:
         
         # Sort features by importance (descending) and take top 100
         sorted_features = sorted(features_dict.items(), key=lambda x: x[1], reverse=True)
-        top_features = [feature_name for feature_name, _ in sorted_features[:100]]
+        top_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
         
-        print(f"Loaded top 100 features for {datatype} - {event_condition}")
+        print(f"Loaded top {top_k} features for {datatype} - {event_condition}")
         return top_features
 
     @staticmethod
@@ -160,7 +160,7 @@ class NormativePCAModel:
         print(f"Loading features for {event} - {condition}")
         print(f"Participants: {participants}")
         if top_features is not None:
-            print(f"Loading only top 100 features")
+            print(f"Loading only top {len(top_features)} features")
         if minimal_imu_set:
             print(f"Using minimal IMU set: Head_imu, RightForeArm_imu")
         
@@ -352,6 +352,16 @@ class NormativePCAModel:
         
         # Load top 100 features
         top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
+        
+        # Filter features to only include those from minimal IMU set if enabled
+        if minimal_imu_set:
+            minimal_imus_prefix = ['Head_imu', 'RightForeArm_imu']
+            original_count = len(top_features)
+            top_features = [f for f in top_features if any(imu in f for imu in minimal_imus_prefix)]
+            print(f"Filtered features from {original_count} to {len(top_features)} for minimal IMU set")
+            
+            if len(top_features) == 0:
+                raise ValueError(f"No features found for minimal IMU set in event-condition '{event_condition}'")
         
         # Get available participants
         available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype, minimal_imu_set=minimal_imu_set)
@@ -718,7 +728,7 @@ def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition)
 
 if __name__ == "__main__":
     # Toggle for minimal IMU set
-    USE_MINIMAL_IMU_SET = False  # Set to True to use only Head_imu and RightForeArm_imu
+    USE_MINIMAL_IMU_SET = True  # Set to True to use only Head_imu and RightForeArm_imu
     
     # Set up paths
     out_root = "Z:/Upper Body/Results/30 Participants/features"
@@ -936,6 +946,16 @@ if __name__ == "__main__":
         try:
             # Load top features
             top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
+            
+            # Filter features to only include those from minimal IMU set if enabled
+            if USE_MINIMAL_IMU_SET:
+                minimal_imus_prefix = ['Head_imu', 'RightForeArm_imu']
+                original_count = len(top_features)
+                top_features = [f for f in top_features if any(imu in f for imu in minimal_imus_prefix)]
+                print(f"  Filtered features from {original_count} to {len(top_features)} for minimal IMU set")
+                
+                if len(top_features) == 0:
+                    raise ValueError(f"No features found for minimal IMU set in event-condition '{event_condition}'")
             
             # Get all participants for this event-condition
             all_participants = available_data[event_condition]
