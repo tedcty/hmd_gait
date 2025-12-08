@@ -10,7 +10,7 @@ import traceback
 class NormativePCAModel:
     
     @staticmethod
-    def get_available_event_conditions(out_root, datatype):
+    def get_available_event_conditions(out_root, datatype, minimal_imu_set=False):
         """
         Get all available event-condition combinations for a given datatype.
         """
@@ -18,6 +18,9 @@ class NormativePCAModel:
         
         if not os.path.exists(base_dir):
             return {}
+        
+        # Define minimal IMU set
+        minimal_imus = {'Head_imu', 'RightForeArm_imu'} if minimal_imu_set else None
         
         event_conditions = {}
         
@@ -36,7 +39,11 @@ class NormativePCAModel:
                     if os.path.isdir(participant_path):
                         
                         # Look through all IMU locations for this participant
-                        for imu_location in os.listdir(participant_dir):
+                        for imu_location in os.listdir(participant_path):
+                            # Filter for minimal IMU set if enabled
+                            if minimal_imus is not None and imu_location not in minimal_imus:
+                                continue
+                                
                             imu_path = os.path.join(participant_path, imu_location)
                             if os.path.isdir(imu_path):
                                 
@@ -145,7 +152,7 @@ class NormativePCAModel:
         return top_features
 
     @staticmethod
-    def load_features_for_event_condition(out_root, datatype, event, condition, participants, top_features=None, return_groups=True):
+    def load_features_for_event_condition(out_root, datatype, event, condition, participants, top_features=None, return_groups=True, minimal_imu_set=False):
         """
         Load features for a specific event-condition combination by filtering files based on filename.
         Only loads files that contain the specific condition in the filename.
@@ -154,6 +161,11 @@ class NormativePCAModel:
         print(f"Participants: {participants}")
         if top_features is not None:
             print(f"Loading only top 100 features")
+        if minimal_imu_set:
+            print(f"Using minimal IMU set: Head_imu, RightForeArm_imu")
+        
+        # Define minimal IMU set
+        minimal_imus = {'Head_imu', 'RightForeArm_imu'} if minimal_imu_set else None
         
         all_features = []
         all_labels = []
@@ -175,6 +187,10 @@ class NormativePCAModel:
             
             # Go through each IMU location for this participant
             for imu_location in os.listdir(participant_path):
+                # Filter for minimal IMU set if enabled
+                if minimal_imus is not None and imu_location not in minimal_imus:
+                    continue
+                    
                 imu_path = os.path.join(participant_path, imu_location)
                 
                 if not os.path.isdir(imu_path):
@@ -248,7 +264,7 @@ class NormativePCAModel:
             return X_combined, y_combined
 
     @staticmethod
-    def load_event_condition_data(out_root, datatype, event_condition, participants, top_features, filter_event_only=False):
+    def load_event_condition_data(out_root, datatype, event_condition, participants, top_features, filter_event_only=False, minimal_imu_set=False):
         """
         Load and filter data for a specific event-condition combination.
         """
@@ -264,7 +280,7 @@ class NormativePCAModel:
         # Load features with top_features filtering applied during loading
         X, y, groups = NormativePCAModel.load_features_for_event_condition(
             out_root, datatype, event, condition, participants, 
-            top_features=top_features, return_groups=True
+            top_features=top_features, return_groups=True, minimal_imu_set=minimal_imu_set
         )
         
         # Filter to only include the available top features
@@ -307,7 +323,7 @@ class NormativePCAModel:
 
     @staticmethod
     def create_normative_pca_models_cv(out_root, datatype, event_condition, results_dir, 
-                                       n_components=None, folds_base_dir=None):
+                                       n_components=None, folds_base_dir=None, minimal_imu_set=False):
         """
         Create normative PCA models using 5-fold cross-validation across participants.
         
@@ -320,6 +336,8 @@ class NormativePCAModel:
         - Aggregate explained variance statistics across folds
         """
         print(f"Creating CV-based normative PCA models for {datatype} - {event_condition}")
+        if minimal_imu_set:
+            print("Using MINIMAL IMU SET: Head_imu, RightForeArm_imu")
         
         # Parse event and condition from event_condition
         parts = event_condition.split()
@@ -327,15 +345,16 @@ class NormativePCAModel:
         event = " ".join(parts[:-1])
         event_filename = event.replace(' ', '_')
         
-        # Create CV results directory
-        cv_dir = os.path.join(results_dir, "pca_models", event_filename, condition, "top100_cv")
+        # Create CV results directory (with suffix for minimal IMU set)
+        imu_suffix = "_minimal" if minimal_imu_set else ""
+        cv_dir = os.path.join(results_dir, "pca_models", event_filename, condition, f"top100_cv{imu_suffix}")
         os.makedirs(cv_dir, exist_ok=True)
         
         # Load top 100 features
         top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
         
         # Get available participants
-        available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
+        available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype, minimal_imu_set=minimal_imu_set)
         if event_condition not in available_data:
             raise ValueError(f"Event-condition '{event_condition}' not found in available data")
         
@@ -380,7 +399,8 @@ class NormativePCAModel:
             try:
                 # Load training data (event windows only)
                 X_train, y_train, groups_train, feature_names = NormativePCAModel.load_event_condition_data(
-                    out_root, datatype, event_condition, train_participants, top_features, filter_event_only=True
+                    out_root, datatype, event_condition, train_participants, top_features, 
+                    filter_event_only=True, minimal_imu_set=minimal_imu_set
                 )
                 
                 if len(X_train) == 0:
@@ -438,7 +458,8 @@ class NormativePCAModel:
                 if len(test_participants) > 0:
                     try:
                         X_test, y_test, groups_test, _ = NormativePCAModel.load_event_condition_data(
-                            out_root, datatype, event_condition, test_participants, top_features, filter_event_only=True
+                            out_root, datatype, event_condition, test_participants, top_features, 
+                            filter_event_only=True, minimal_imu_set=minimal_imu_set
                         )
                         
                         if len(X_test) > 0:
@@ -696,6 +717,9 @@ def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition)
     return combined, stats
 
 if __name__ == "__main__":
+    # Toggle for minimal IMU set
+    USE_MINIMAL_IMU_SET = False  # Set to True to use only Head_imu and RightForeArm_imu
+    
     # Set up paths
     out_root = "Z:/Upper Body/Results/30 Participants/features"
     results_dir = "Z:/Upper Body/Results/30 Participants/models"
@@ -708,6 +732,10 @@ if __name__ == "__main__":
     n_components = None  # Automatically set to n_participants - 1
     
     print("Running in CROSS-VALIDATION mode")
+    if USE_MINIMAL_IMU_SET:
+        print("=" * 60)
+        print("MINIMAL IMU SET MODE: Using only Head_imu and RightForeArm_imu")
+        print("=" * 60)
     
     # Path to directory containing event-specific fold JSON files
     folds_base_dir = os.path.join(results_dir, "cv_folds")
@@ -718,7 +746,7 @@ if __name__ == "__main__":
         print(f"Using event-specific folds from: {folds_base_dir}")
     
     # Get all available event-condition combinations
-    available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype)
+    available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype, minimal_imu_set=USE_MINIMAL_IMU_SET)
     print("\nAvailable event-condition combinations:")
     for event_condition, participants in available_data.items():
         print(f"  {event_condition}: {len(participants)} participants")
@@ -740,7 +768,8 @@ if __name__ == "__main__":
         try:
             cv_result = NormativePCAModel.create_normative_pca_models_cv(
                 out_root, datatype, event_condition, results_dir, 
-                n_components=n_components, folds_base_dir=folds_base_dir
+                n_components=n_components, folds_base_dir=folds_base_dir,
+                minimal_imu_set=USE_MINIMAL_IMU_SET
             )
             
             if cv_result:
@@ -771,7 +800,8 @@ if __name__ == "__main__":
         event = " ".join(parts[:-1])
         event_filename = event.replace(' ', '_')
         
-        cv_dir = os.path.join(results_dir, "pca_models", event_filename, condition, "top100_cv")
+        imu_suffix = "_minimal" if USE_MINIMAL_IMU_SET else ""
+        cv_dir = os.path.join(results_dir, "pca_models", event_filename, condition, f"top100_cv{imu_suffix}")
         
         if not os.path.exists(cv_dir):
             print(f"  Skipping - CV directory not found: {cv_dir}")
@@ -898,8 +928,9 @@ if __name__ == "__main__":
         event = " ".join(parts[:-1])
         event_filename = event.replace(' ', '_')
         
-        # Create pc_model directory
-        pc_model_dir = os.path.join(results_dir, "pca_models", event_filename, condition, "pc_model")
+        # Create pc_model directory (with suffix for minimal IMU set)
+        imu_suffix = "_minimal" if USE_MINIMAL_IMU_SET else ""
+        pc_model_dir = os.path.join(results_dir, "pca_models", event_filename, condition, f"pc_model{imu_suffix}")
         os.makedirs(pc_model_dir, exist_ok=True)
         
         try:
@@ -912,7 +943,8 @@ if __name__ == "__main__":
             
             # Load all data (event windows only)
             X_all, y_all, groups_all, feature_names = NormativePCAModel.load_event_condition_data(
-                out_root, datatype, event_condition, all_participants, top_features, filter_event_only=True
+                out_root, datatype, event_condition, all_participants, top_features, 
+                filter_event_only=True, minimal_imu_set=USE_MINIMAL_IMU_SET
             )
             
             if len(X_all) == 0:
@@ -998,6 +1030,8 @@ if __name__ == "__main__":
     
     print(f"\n{'='*60}")
     print(f"CV-based PCA model creation and aggregation completed.")
-    print(f"Final models saved to {results_dir}/pca_models/*/pc_model/")
+    imu_mode = "minimal IMU set" if USE_MINIMAL_IMU_SET else "all IMUs"
+    print(f"Mode: {imu_mode}")
+    print(f"Final models saved to {results_dir}/pca_models/*/pc_model{imu_suffix}/")
     print(f"Results saved to {results_dir}/pca_models/")
     print(f"{'='*60}")
