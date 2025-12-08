@@ -117,7 +117,7 @@ class NormativePCAModel:
         return folds
 
     @staticmethod
-    def load_top_features(results_dir, datatype, event_condition, top_k=100):
+    def load_top_features(results_dir, datatype, event_condition, top_k=100, minimal_imu_set=False, minimal_results_dir=None):
         """
         Load the top 100 features from the prevalence-based feature selection results.
         """
@@ -129,14 +129,26 @@ class NormativePCAModel:
         # Format paths to match the directory structure
         event_filename = event.replace(' ', '_')
         
-        # Path structure: models/IMU/Event_name/top_100/IMU_Event_name_Condition_prevalence_top100_features.json
-        feature_file = os.path.join(
-            results_dir, 
-            datatype,
-            event_filename,
-            "top_100",
-            f"{datatype}_{event}_prevalence_top100_features.json"
-        )
+        # Use different feature file for minimal IMU set
+        if minimal_imu_set:
+            if minimal_results_dir is None:
+                raise ValueError("minimal_results_dir must be provided when minimal_imu_set=True")
+            
+            feature_file = os.path.join(
+                minimal_results_dir,
+                event_filename,
+                "product_usecase_right",
+                "top_100",
+                f"{datatype}_{event}_prevalence_top100_features.json"
+            )
+        else:
+            feature_file = os.path.join(
+                results_dir, 
+                datatype,
+                event_filename,
+                "top_100",
+                f"{datatype}_{event}_prevalence_top100_features.json"
+            )
         
         if not os.path.exists(feature_file):
             raise FileNotFoundError(f"Feature selection file not found: {feature_file}")
@@ -144,11 +156,12 @@ class NormativePCAModel:
         with open(feature_file, 'r') as f:
             features_dict = json.load(f)
         
-        # Sort features by importance (descending) and take top 100
+        # Sort features by importance (descending) and take top k
         sorted_features = sorted(features_dict.items(), key=lambda x: x[1], reverse=True)
         top_features = [feature_name for feature_name, _ in sorted_features[:top_k]]
         
-        print(f"Loaded top {top_k} features for {datatype} - {event_condition}")
+        mode = "minimal IMU set" if minimal_imu_set else "all IMUs"
+        print(f"Loaded top {top_k} features for {datatype} - {event_condition} ({mode})")
         return top_features
 
     @staticmethod
@@ -323,7 +336,7 @@ class NormativePCAModel:
 
     @staticmethod
     def create_normative_pca_models_cv(out_root, datatype, event_condition, results_dir, 
-                                       n_components=None, folds_base_dir=None, minimal_imu_set=False):
+                                       n_components=None, folds_base_dir=None, minimal_imu_set=False, minimal_results_dir=None):
         """
         Create normative PCA models using 5-fold cross-validation across participants.
         
@@ -351,17 +364,10 @@ class NormativePCAModel:
         os.makedirs(cv_dir, exist_ok=True)
         
         # Load top 100 features
-        top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
-        
-        # Filter features to only include those from minimal IMU set if enabled
-        if minimal_imu_set:
-            minimal_imus_prefix = ['Head_imu', 'RightForeArm_imu']
-            original_count = len(top_features)
-            top_features = [f for f in top_features if any(imu in f for imu in minimal_imus_prefix)]
-            print(f"Filtered features from {original_count} to {len(top_features)} for minimal IMU set")
-            
-            if len(top_features) == 0:
-                raise ValueError(f"No features found for minimal IMU set in event-condition '{event_condition}'")
+        top_features = NormativePCAModel.load_top_features(
+            results_dir, datatype, event_condition, top_k=100, 
+            minimal_imu_set=minimal_imu_set, minimal_results_dir=minimal_results_dir
+        )
         
         # Get available participants
         available_data = NormativePCAModel.get_available_event_conditions(out_root, datatype, minimal_imu_set=minimal_imu_set)
@@ -733,6 +739,7 @@ if __name__ == "__main__":
     # Set up paths
     out_root = "Z:/Upper Body/Results/30 Participants/features"
     results_dir = "Z:/Upper Body/Results/30 Participants/models"
+    minimal_results_dir = "Z:/Upper Body/Results/30 Participants/minimal_imu_models"
     
     # Create results directory if it doesn't exist
     os.makedirs(results_dir, exist_ok=True)
@@ -779,7 +786,8 @@ if __name__ == "__main__":
             cv_result = NormativePCAModel.create_normative_pca_models_cv(
                 out_root, datatype, event_condition, results_dir, 
                 n_components=n_components, folds_base_dir=folds_base_dir,
-                minimal_imu_set=USE_MINIMAL_IMU_SET
+                minimal_imu_set=USE_MINIMAL_IMU_SET,
+                minimal_results_dir=minimal_results_dir
             )
             
             if cv_result:
@@ -945,17 +953,11 @@ if __name__ == "__main__":
         
         try:
             # Load top features
-            top_features = NormativePCAModel.load_top_features(results_dir, datatype, event_condition, top_k=100)
-            
-            # Filter features to only include those from minimal IMU set if enabled
-            if USE_MINIMAL_IMU_SET:
-                minimal_imus_prefix = ['Head_imu', 'RightForeArm_imu']
-                original_count = len(top_features)
-                top_features = [f for f in top_features if any(imu in f for imu in minimal_imus_prefix)]
-                print(f"  Filtered features from {original_count} to {len(top_features)} for minimal IMU set")
-                
-                if len(top_features) == 0:
-                    raise ValueError(f"No features found for minimal IMU set in event-condition '{event_condition}'")
+            top_features = NormativePCAModel.load_top_features(
+                results_dir, datatype, event_condition, top_k=100, 
+                minimal_imu_set=USE_MINIMAL_IMU_SET,
+                minimal_results_dir=minimal_results_dir
+            )
             
             # Get all participants for this event-condition
             all_participants = available_data[event_condition]
