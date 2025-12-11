@@ -706,33 +706,4 @@ if __name__ == "__main__":
     print(f"  - Normative gait analysis: {len(normative_results)} events")
     print(f"  - Related events analysis: {len(related_events_results)} event pairs")
 
-    # Create combined summary report
-    combined_summary_path = os.path.join(output_dir, "combined_summary_report.txt")
-    with open(combined_summary_path, 'w') as f:
-        f.write("="*80 + "\n")
-        f.write("PCA DEVIATION ANALYSIS SUMMARY REPORT\n")
-        f.write("="*80 + "\n\n")
-
-        f.write("1. CONDITION-BASED DEVIATION ANALYSIS\n")
-        f.write("-"*80 + "\n")
-        f.write("Projecting AR and VR trials into Normal PCA models\n\n")
-        if not condition_summary.empty:
-            f.write(condition_summary.to_string(index=False))
-            f.write("\n\n")
-
-        f.write("\n2. DEVIATION FROM NORMATIVE GAIT\n")
-        f.write("-"*80 + "\n")
-        f.write("Projecting all events into Straight walk PCA model\n\n")
-        if not normative_summary.empty:
-            f.write(normative_summary.to_string(index=False))
-            f.write("\n\n")
-
-        f.write("\n3. DEVIATION BETWEEN BIOMECHANICALLY RELATED EVENTS\n")
-        f.write("-"*80 + "\n")
-        f.write("Cross-projection between similar movement tasks\n\n")
-        if not related_summary.empty:
-            f.write(related_summary.to_string(index=False))
-            f.write("\n\n")
-
-    print(f"\nCombined summary report saved to: {combined_summary_path}")
     print("\nAnalysis complete!")
