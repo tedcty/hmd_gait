@@ -480,6 +480,7 @@ class DeviationAnalysis:
     def visualise_condition_deviation(results_dict, output_dir):
         """
         Create visualisation for condition-based deviation analysis.
+        Single plot with all events on x-axis, AR and VR side-by-side.
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -503,25 +504,18 @@ class DeviationAnalysis:
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Create box plot
-        events = df_plot['Event'].unique()
-        n_events = len(events)
+        # Create single box plot with all events
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-        fig, axes = plt.subplots(1, n_events, figsize=(5*n_events, 6), sharey=True)
-        if n_events == 1:
-            axes = [axes]
+        sns.boxplot(data=df_plot, x='Event', y='Percentage_Error', hue='Condition',
+                    palette={'AR': '#E74C3C', 'VR': '#3498DB'},
+                    ax=ax, showfliers=False)
 
-        for idx, event in enumerate(events):
-            event_data = df_plot[df_plot['Event'] == event]
-
-            sns.boxplot(data=event_data, x='Condition', y='Percentage_Error',
-                        palette={'AR': '#E74C3C', 'VR': '#3498DB'},
-                        ax=axes[idx], showfliers=False)
-
-            axes[idx].set_title(event, fontsize=12, fontweight='bold')
-            axes[idx].set_xlabel('Condition', fontsize=11)
-            axes[idx].set_ylabel('Reconstruction Error (%)' if idx == 0 else '', fontsize=11)
-            axes[idx].grid(axis='y', alpha=0.3)
+        ax.set_xlabel('Event', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+        ax.legend(title='Condition', loc='upper right')
+        ax.grid(axis='y', alpha=0.3)
 
         plt.tight_layout()
         plot_path = os.path.join(output_dir, "condition_deviation_comparison.png")
@@ -532,32 +526,36 @@ class DeviationAnalysis:
     @staticmethod
     def visualise_event_deviation(results_dict, output_dir, title):
         """
-        Create visualisation for event-based deviation analysis.
+        Create visualisation for event-based deviation analysis using box plots.
+        Shows per-participant distribution of reconstruction errors.
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        # Extract mean percentage errors
-        events = []
-        errors = []
-        error_stds = []
-
+        # Prepare data for plotting - aggregate per participant
+        plot_data = []
         for key, result in results_dict.items():
-            events.append(key)
-            errors.append(result['mean_percent_error'])
-            error_stds.append(result['std_percent_error'])
+            per_participant = pd.DataFrame({
+                'Participant': result['participants'],
+                'Percentage_Error': result['percentage_errors']
+            }).groupby('Participant')['Percentage_Error'].mean().reset_index()
 
-        # Create bar plot
-        fig, ax = plt.subplots(figsize=(10, 6))
+            for _, row in per_participant.iterrows():
+                plot_data.append({
+                    'Event': key,
+                    'Percentage_Error': row['Percentage_Error']
+                })
 
-        x_pos = np.arange(len(events))
-        bars = ax.bar(x_pos, errors, yerr=error_stds, capsize=5,
-                        color='#3182BD', alpha=0.8, error_kw={'linewidth': 2})
+        df_plot = pd.DataFrame(plot_data)
+
+        # Create box plot
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        sns.boxplot(data=df_plot, x='Event', y='Percentage_Error',
+                    color='#3182BD', ax=ax, showfliers=False)
 
         ax.set_xlabel('Event Projection', fontsize=12, fontweight='bold')
         ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(events, rotation=45, ha='right')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)
 
         plt.tight_layout()
@@ -635,7 +633,7 @@ if __name__ == "__main__":
     # 2. EVENT-BASED DEVIATION ANALYSIS
     print("\n\n")
 
-    # a. Deviation from Normative Gait (all events → Straight walk)
+    # a. Deviation from Normative Gait (other events data to Straight walk model)
     # Exclude Straight walk itself to only measure deviation of OTHER events
     events_to_test = [e for e in all_events if e != "Straight walk"]
 
