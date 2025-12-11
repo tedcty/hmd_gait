@@ -814,7 +814,10 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print("AGGREGATING LOADINGS AND RECONSTRUCTION ERRORS ACROSS FOLDS")
     print(f"{'='*60}\n")
-    
+
+    # Group data by event for combined visualization
+    event_errors = {}  # Store errors grouped by event
+
     for event_condition in available_data.keys():
         print(f"\n{'='*50}")
         print(f"Aggregating results for: {event_condition}")
@@ -883,40 +886,18 @@ if __name__ == "__main__":
             error_stats_df.to_csv(error_stats_path, index=False)
             print(f"  Saved error summary to: {error_stats_path}")
             
-
+            # Store error data for combined visualization
+            if event not in event_errors:
+                event_errors[event] = {}
+            
             # Get per-participant mean percentage errors
             per_participant = (
                 combined_errors.groupby("Participant")["Percentage_Error"]
                   .mean()
-                  .values
+                  .reset_index()
             )
-            
-            # Create box plot
-            fig, ax = plt.subplots(figsize=(8, 4))
-            
-            bp = ax.boxplot(
-                [per_participant],
-                widths=0.25,
-                patch_artist=True,
-                showfliers=False,
-                boxprops=dict(facecolor="#3182BD", color="black", linewidth=1.2),
-                medianprops=dict(color="black", linewidth=1.2),
-                whiskerprops=dict(color="black", linewidth=1.2),
-                capprops=dict(color="black", linewidth=1.2),
-            )
-            
-            # Axes formatting
-            ax.set_xticks([1])
-            ax.set_xticklabels([condition])
-            ax.set_xlabel("Condition", fontsize=12)
-            ax.set_ylabel("Reconstruction Error (%)", fontsize=12)
-            ax.grid(axis="y", alpha=0.3)
-            
-            plt.tight_layout()
-            error_plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_recon_error.png")
-            plt.savefig(error_plot_path, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  Saved error visualisation to: {error_plot_path}")
+            per_participant['Condition'] = condition
+            event_errors[event][condition] = per_participant
             
             # Print summary statistics
             print(f"  Summary Statistics:")
@@ -929,6 +910,78 @@ if __name__ == "__main__":
             print(f"  Error aggregating results for {event_condition}: {e}")
             traceback.print_exc()
             continue
+
+    # Create combined box plots per event (all 3 conditions side-by-side)
+    print(f"\n{'='*60}")
+    print("CREATING COMBINED RECONSTRUCTION ERROR PLOTS PER EVENT")
+    print(f"{'='*60}\n")
+
+    for event, conditions_data in event_errors.items():
+        if len(conditions_data) == 0:
+            continue
+        
+        event_filename = event.replace(' ', '_')
+        
+        # Combine all conditions into one DataFrame
+        plot_data = []
+        for condition, df in conditions_data.items():
+            plot_data.append(df)
+        
+        if not plot_data:
+            continue
+        
+        combined_df = pd.concat(plot_data, ignore_index=True)
+        
+        # Create box plot with all conditions side-by-side
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        # Use single color for all conditions
+        single_color = '#3182BD'  # Blue
+        
+        # Prepare data for boxplot
+        conditions_order = ['Normal', 'AR', 'VR']
+        data_to_plot = []
+        labels_to_use = []
+        
+        for condition in conditions_order:
+            if condition in conditions_data:
+                data_to_plot.append(conditions_data[condition]['Percentage_Error'].values)
+                labels_to_use.append(condition)
+        
+        # Create box plot
+        bp = ax.boxplot(
+            data_to_plot,
+            widths=0.6,
+            patch_artist=True,
+            showfliers=False,
+            medianprops=dict(color="black", linewidth=1.5),
+            whiskerprops=dict(color="black", linewidth=1.2),
+            capprops=dict(color="black", linewidth=1.2),
+            boxprops=dict(linewidth=1.2)
+        )
+        
+        # Color all boxes the same
+        for patch in bp['boxes']:
+            patch.set_facecolor(single_color)
+            patch.set_edgecolor('black')
+        
+        # Axes formatting
+        ax.set_xticks(range(1, len(labels_to_use) + 1))
+        ax.set_xticklabels(labels_to_use, fontsize=11)
+        ax.set_xlabel("Condition", fontsize=12, fontweight='bold')
+        ax.set_ylabel("Reconstruction Error (%)", fontsize=12, fontweight='bold')
+        ax.set_title(f"{event}", fontsize=13, fontweight='bold')
+        ax.grid(axis="y", alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save to the event's directory (use first condition's directory as base)
+        first_condition = list(conditions_data.keys())[0]
+        base_cv_dir = os.path.join(results_dir, "pca_models", event_filename, first_condition, f"top100_cv{imu_suffix}")
+        error_plot_path = os.path.join(os.path.dirname(base_cv_dir), f"{datatype}_{event_filename}_all_conditions_recon_error.png")
+        plt.savefig(error_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Saved combined plot for {event}: {error_plot_path}")
     
     # Train final PCA models on whole dataset
     print(f"\n{'='*60}")
