@@ -524,7 +524,7 @@ class DeviationAnalysis:
         print(f"Saved condition deviation plot: {plot_path}")
 
     @staticmethod
-    def visualise_event_deviation(results_dict, output_dir, title):
+    def visualise_event_deviation(results_dict, output_dir, title, color='#3182BD'):
         """
         Create visualisation for event-based deviation analysis using box plots.
         Shows per-participant distribution of reconstruction errors.
@@ -551,7 +551,7 @@ class DeviationAnalysis:
         fig, ax = plt.subplots(figsize=(12, 6))
 
         sns.boxplot(data=df_plot, x='Event', y='Percentage_Error',
-                    color='#3182BD', ax=ax, showfliers=False)
+                    color=color, ax=ax, showfliers=False)
 
         ax.set_xlabel('Event Projection', fontsize=12, fontweight='bold')
         ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
@@ -657,7 +657,8 @@ if __name__ == "__main__":
     # Visualise normative gait results
     DeviationAnalysis.visualise_event_deviation(
         normative_results, normative_output_dir,
-        "Deviation from Normative Gait (Straight Walk)"
+        "Deviation from Normative Gait (Straight Walk)",
+        color='#27AE60'
     )
 
     # b. Biomechanically Related Event Pairs
@@ -690,7 +691,8 @@ if __name__ == "__main__":
     # Visualise related events results
     DeviationAnalysis.visualise_event_deviation(
         related_events_results, related_output_dir,
-        "Deviation Between Biomechanically Related Events"
+        "Deviation Between Biomechanically Related Events",
+        color='#8E44AD'
     )
 
     # 3. COMBINED SUMMARY
