@@ -502,15 +502,22 @@ class NormativePCAModel:
                             # Compute reconstruction error per sample
                             reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed) ** 2).sum(axis=1))
                             
-
+                            # Compute original magnitude directly from test data
+                            original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
+                            
                             # Compute variance captured (squared norm of scores)
                             variance_captured = (test_scores ** 2).sum(axis=1)
+                            
+                            # Calculate percentage error
+                            percentage_errors = (reconstruction_errors / original_magnitudes) * 100
                             
                             # Save variance metrics
                             variance_metrics = pd.DataFrame({
                                 'Participant': groups_test,
                                 'Reconstruction_Error': reconstruction_errors,
-                                'Variance_Captured': variance_captured
+                                'Variance_Captured': variance_captured,
+                                'Original_Magnitude': original_magnitudes,
+                                'Percentage_Error': percentage_errors
                             })
                             
                             variance_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_test_variance_metrics.csv")
@@ -876,15 +883,7 @@ if __name__ == "__main__":
             error_stats_df.to_csv(error_stats_path, index=False)
             print(f"  Saved error summary to: {error_stats_path}")
             
-            # Create reconstruction error visualisation (box plot with percentage error)
-            # Calculate percentage error
-            combined_errors['Original_Magnitude'] = np.sqrt(
-                combined_errors['Variance_Captured'] + combined_errors['Reconstruction_Error']**2
-            )
-            combined_errors['Percentage_Error'] = (
-                combined_errors['Reconstruction_Error'] / combined_errors['Original_Magnitude']
-            ) * 100
-            
+
             # Get per-participant mean percentage errors
             per_participant = (
                 combined_errors.groupby("Participant")["Percentage_Error"]
