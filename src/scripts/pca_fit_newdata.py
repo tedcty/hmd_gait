@@ -32,36 +32,22 @@ class DeviationAnalysis:
         return pc
 
     @staticmethod
-    def load_top_features(results_dir, event, datatype="IMU", minimal_results_dir=None):
+    def load_top_features(results_dir, event, condition, datatype="IMU", minimal_results_dir=None):
         """
-        Load the top 100 features used for training the PCA model.
+        Load feature order directly from trained PCA model loadings.
+        This guarantees exact feature order match with the trained model.
         """
         event_filename = event.replace(' ', '_')
-
-        if minimal_results_dir:
-            feature_file = os.path.join(
-                minimal_results_dir,
-                event_filename,
-                "product_usecase_right",
-                "top_100",
-                f"{datatype}_{event}_prevalence_top100_features.json"
-            )
-        else:
-            feature_file = os.path.join(
-                results_dir,
-                datatype,
-                event_filename,
-                "top_100",
-                f"{datatype}_{event}_prevalence_top100_features.json"
-            )
-
-        if not os.path.exists(feature_file):
-            raise FileNotFoundError(f"Feature file not found: {feature_file}")
-
-        with open(feature_file, 'r') as f:
-            features_dict = json.load(f)
-
-        return list(features_dict.keys())
+        loadings_file = os.path.join(
+            results_dir, "pca_models", event_filename, condition, "pc_model_minimal",
+            f"{datatype}_{event_filename}_{condition}_loadings.csv"
+        )
+        
+        if not os.path.exists(loadings_file):
+            raise FileNotFoundError(f"Loadings file not found: {loadings_file}")
+        
+        loadings_df = pd.read_csv(loadings_file, index_col=0)
+        return loadings_df.index.tolist()
 
     @staticmethod
     def load_test_data(out_root, datatype, event, condition, participants, top_features, minimal_imu_set=True):
@@ -227,7 +213,7 @@ class DeviationAnalysis:
             # Load top features for this event
             try:
                 top_features = DeviationAnalysis.load_top_features(
-                    results_dir, event, datatype, minimal_results_dir
+                    results_dir, event, "Normal", datatype, minimal_results_dir
                 )
                 print(f"Loaded {len(top_features)} top features")
             except Exception as e:
@@ -277,117 +263,104 @@ class DeviationAnalysis:
         return results_dict
 
     @staticmethod
-    def event_based_deviation_analysis(out_root, results_dir, event_pairs, condition,
+    def event_based_deviation_analysis(out_root, results_dir, event_pairs, conditions,
                                         test_participants, minimal_results_dir=None,
                                         datatype="IMU", minimal_imu_set=True):
         """
         Analyse event-based deviation by projecting one event's data into another event's PCA model.
+        Each condition is projected into its respective target event PCA model.
         """
         print("="*80)
         print("EVENT-BASED DEVIATION ANALYSIS")
-        print(f"Condition: {condition}")
+        print(f"Conditions: {conditions}")
         print("="*80)
 
         results_dict = {}
 
         for source_event, target_event in event_pairs:
             print(f"\n{'='*60}")
-            print(f"Projecting {source_event} into {target_event} PCA model")
+            print(f"Projecting {source_event} into {target_event} PCA models")
             print(f"{'='*60}")
 
             pair_key = f"{source_event}→{target_event}"
 
-            # Load target event's PCA model
-            try:
-                pc_target = DeviationAnalysis.load_pca_model(
-                    results_dir, target_event, condition, datatype
+            pair_results = {}
+
+            for condition in conditions:
+                print(f"  Condition: {condition}")
+
+                # Load target event's PCA model for THIS condition
+                try:
+                    pc_target = DeviationAnalysis.load_pca_model(
+                        results_dir, target_event, condition, datatype
+                    )
+                    print(f"  Loaded {target_event} {condition} PCA model")
+                except Exception as e:
+                    print(f"  Error loading {target_event} {condition} PCA model: {e}")
+                    continue
+
+                # Load top features for target event (PCA was trained on these)
+                try:
+                    top_features = DeviationAnalysis.load_top_features(
+                        results_dir, target_event, condition, datatype, minimal_results_dir
+                    )
+                    print(f"  Loaded {len(top_features)} top features from {target_event}")
+                except Exception as e:
+                    print(f"  Error loading top features for {target_event}: {e}")
+                    continue
+
+                # Load source event data for this condition
+                X_test, y_test, groups_test = DeviationAnalysis.load_test_data(
+                    out_root, datatype, source_event, condition,
+                    test_participants, top_features, minimal_imu_set
                 )
-                print(f"Loaded {target_event} PCA model")
-            except Exception as e:
-                print(f"Error loading {target_event} PCA model: {e}")
-                continue
 
-            # Load top features for target event (PCA was trained on these)
-            try:
-                top_features = DeviationAnalysis.load_top_features(
-                    results_dir, target_event, datatype, minimal_results_dir
-                )
-                print(f"Loaded {len(top_features)} top features from {target_event}")
-            except Exception as e:
-                print(f"Error loading top features for {target_event}: {e}")
-                continue
+                if X_test is None or len(X_test) == 0:
+                    print(f"  No test data available for {source_event} - {condition}")
+                    continue
 
-            # Load source event data
-            X_test, y_test, groups_test = DeviationAnalysis.load_test_data(
-                out_root, datatype, source_event, condition,
-                test_participants, top_features, minimal_imu_set
-            )
+                # Compute reconstruction error
+                recon_errors, percent_errors, X_recon, scores = \
+                    DeviationAnalysis.compute_reconstruction_error(pc_target, X_test)
 
-            if X_test is None or len(X_test) == 0:
-                print(f"No test data available for {source_event}")
-                continue
+                # Store results
+                condition_result = {
+                    'reconstruction_errors': recon_errors,
+                    'percentage_errors': percent_errors,
+                    'participants': groups_test,
+                    'n_samples': len(X_test),
+                    'mean_error': recon_errors.mean(),
+                    'std_error': recon_errors.std(),
+                    'mean_percent_error': percent_errors.mean(),
+                    'std_percent_error': percent_errors.std(),
+                    'median_percent_error': np.median(percent_errors),
+                    'pca_scores': scores
+                }
 
-            # Compute reconstruction error
-            recon_errors, percent_errors, X_recon, scores = \
-                DeviationAnalysis.compute_reconstruction_error(pc_target, X_test)
+                pair_results[condition] = condition_result
 
-            # Store results
-            pair_result = {
-                'reconstruction_errors': recon_errors,
-                'percentage_errors': percent_errors,
-                'participants': groups_test,
-                'n_samples': len(X_test),
-                'mean_error': recon_errors.mean(),
-                'std_error': recon_errors.std(),
-                'mean_percent_error': percent_errors.mean(),
-                'std_percent_error': percent_errors.std(),
-                'median_percent_error': np.median(percent_errors),
-                'pca_scores': scores
-            }
+                print(f"  Mean reconstruction error: {recon_errors.mean():.4f} ± {recon_errors.std():.4f}")
+                print(f"  Mean percentage error: {percent_errors.mean():.2f}% ± {percent_errors.std():.2f}%")
 
-            results_dict[pair_key] = pair_result
-
-            print(f"Mean reconstruction error: {recon_errors.mean():.4f} ± {recon_errors.std():.4f}")
-            print(f"Mean percentage error: {percent_errors.mean():.2f}% ± {percent_errors.std():.2f}%")
-            print(f"Median percentage error: {np.median(percent_errors):.2f}%")
+            results_dict[pair_key] = pair_results
 
         return results_dict
 
     @staticmethod
-    def deviation_from_normative_gait(out_root, results_dir, all_events, condition,
+    def deviation_from_normative_gait(out_root, results_dir, all_events, conditions,
                                         test_participants, minimal_results_dir=None,
                                         datatype="IMU", minimal_imu_set=True):
         """
         Project all events into Straight walk PCA model to assess deviation from normative gait.
+        Each condition is projected into its respective Straight walk PCA model.
         """
         print("="*80)
         print("DEVIATION FROM NORMATIVE GAIT")
-        print(f"Projecting all events into Straight walk PCA model")
-        print(f"Condition: {condition}")
+        print(f"Projecting events into their respective Straight walk PCA models")
+        print(f"Conditions: {conditions}")
         print("="*80)
 
         normative_event = "Straight walk"
-
-        # Load Straight walk PCA model
-        try:
-            pc_normative = DeviationAnalysis.load_pca_model(
-                results_dir, normative_event, condition, datatype
-            )
-            print(f"Loaded Straight walk PCA model")
-            print(f"  Number of components: {pc_normative.modes.shape[1]}")
-        except Exception as e:
-            print(f"Error loading Straight walk PCA model: {e}")
-            return {}
-
-        # Load top features for Straight walk
-        try:
-            top_features = DeviationAnalysis.load_top_features(
-                results_dir, normative_event, datatype, minimal_results_dir
-            )
-            print(f"Loaded {len(top_features)} top features")
-        except Exception as e:
-            print(f"Error loading top features: {e}")
-            return {}
 
         results_dict = {}
 
@@ -396,39 +369,66 @@ class DeviationAnalysis:
             print(f"Testing event: {event}")
             print(f"{'='*60}")
 
-            # Load event data
-            X_test, y_test, groups_test = DeviationAnalysis.load_test_data(
-                out_root, datatype, event, condition,
-                test_participants, top_features, minimal_imu_set
-            )
+            event_results = {}
 
-            if X_test is None or len(X_test) == 0:
-                print(f"No test data available for {event}")
-                continue
+            for condition in conditions:
+                print(f"  Condition: {condition}")
 
-            # Compute reconstruction error
-            recon_errors, percent_errors, X_recon, scores = \
-                DeviationAnalysis.compute_reconstruction_error(pc_normative, X_test)
+                # Load Straight walk PCA model for THIS condition
+                try:
+                    pc_normative = DeviationAnalysis.load_pca_model(
+                        results_dir, normative_event, condition, datatype
+                    )
+                    print(f"  Loaded Straight walk {condition} PCA model")
+                    print(f"    Number of components: {pc_normative.modes.shape[1]}")
+                except Exception as e:
+                    print(f"  Error loading Straight walk {condition} PCA model: {e}")
+                    continue
 
-            # Store results
-            event_result = {
-                'reconstruction_errors': recon_errors,
-                'percentage_errors': percent_errors,
-                'participants': groups_test,
-                'n_samples': len(X_test),
-                'mean_error': recon_errors.mean(),
-                'std_error': recon_errors.std(),
-                'mean_percent_error': percent_errors.mean(),
-                'std_percent_error': percent_errors.std(),
-                'median_percent_error': np.median(percent_errors),
-                'pca_scores': scores
-            }
+                # Load top features for Straight walk
+                try:
+                    top_features = DeviationAnalysis.load_top_features(
+                        results_dir, normative_event, condition, datatype, minimal_results_dir
+                    )
+                    print(f"  Loaded {len(top_features)} top features")
+                except Exception as e:
+                    print(f"  Error loading top features: {e}")
+                    continue
 
-            results_dict[event] = event_result
+                # Load event data for this condition
+                X_test, y_test, groups_test = DeviationAnalysis.load_test_data(
+                    out_root, datatype, event, condition,
+                    test_participants, top_features, minimal_imu_set
+                )
 
-            print(f"Mean reconstruction error: {recon_errors.mean():.4f} ± {recon_errors.std():.4f}")
-            print(f"Mean percentage error: {percent_errors.mean():.2f}% ± {percent_errors.std():.2f}%")
-            print(f"Median percentage error: {np.median(percent_errors):.2f}%")
+                if X_test is None or len(X_test) == 0:
+                    print(f"  No test data available for {event} - {condition}")
+                    continue
+
+                # Compute reconstruction error
+                recon_errors, percent_errors, X_recon, scores = \
+                    DeviationAnalysis.compute_reconstruction_error(pc_normative, X_test)
+
+                # Store results
+                condition_result = {
+                    'reconstruction_errors': recon_errors,
+                    'percentage_errors': percent_errors,
+                    'participants': groups_test,
+                    'n_samples': len(X_test),
+                    'mean_error': recon_errors.mean(),
+                    'std_error': recon_errors.std(),
+                    'mean_percent_error': percent_errors.mean(),
+                    'std_percent_error': percent_errors.std(),
+                    'median_percent_error': np.median(percent_errors),
+                    'pca_scores': scores
+                }
+
+                event_results[condition] = condition_result
+
+                print(f"  Mean reconstruction error: {recon_errors.mean():.4f} ± {recon_errors.std():.4f}")
+                print(f"  Mean percentage error: {percent_errors.mean():.2f}% ± {percent_errors.std():.2f}%")
+
+            results_dict[event] = event_results
 
         return results_dict
 
@@ -480,7 +480,7 @@ class DeviationAnalysis:
     def visualise_condition_deviation(results_dict, output_dir):
         """
         Create visualisation for condition-based deviation analysis.
-        Single plot with all events on x-axis, AR and VR side-by-side.
+        Separate subplots for each event in 2x4 arrangement with AR and VR side-by-side.
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -504,18 +504,62 @@ class DeviationAnalysis:
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Create single box plot with all events
-        fig, ax = plt.subplots(figsize=(14, 6))
+        # Create 2x4 subplot grid
+        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+        axes = axes.flatten()
 
-        sns.boxplot(data=df_plot, x='Event', y='Percentage_Error', hue='Condition',
-                    palette={'AR': '#E74C3C', 'VR': '#3498DB'},
-                    ax=ax, showfliers=False)
+        # Get unique events (sorted)
+        events = sorted(df_plot['Event'].unique())
 
-        ax.set_xlabel('Event', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-        ax.legend(title='Condition', loc='upper right')
-        ax.grid(axis='y', alpha=0.3)
+        # Define colours for conditions
+        condition_colours = {'AR': '#2ECC71', 'VR': '#E74C3C'}
+
+        for idx, event in enumerate(events):
+            ax = axes[idx]
+            
+            # Filter data for this event
+            event_data = df_plot[df_plot['Event'] == event]
+            
+            # Prepare data for side-by-side boxes
+            data_to_plot = []
+            labels = []
+            colours = []
+            
+            for condition in ['AR', 'VR']:
+                cond_data = event_data[event_data['Condition'] == condition]
+                if len(cond_data) > 0:
+                    data_to_plot.append(cond_data['Percentage_Error'].values)
+                    labels.append(condition)
+                    colours.append(condition_colours[condition])
+            
+            if data_to_plot:
+                # Create box plot
+                bp = ax.boxplot(
+                    data_to_plot,
+                    widths=0.6,
+                    patch_artist=True,
+                    showfliers=False,
+                    medianprops=dict(color="black", linewidth=1.5),
+                    whiskerprops=dict(color="black", linewidth=1.2),
+                    capprops=dict(color="black", linewidth=1.2),
+                    boxprops=dict(linewidth=1.2)
+                )
+                
+                # Colour the boxes
+                for patch, colour in zip(bp['boxes'], colours):
+                    patch.set_facecolor(colour)
+                    patch.set_edgecolor('black')
+                
+                # Set labels and formatting
+                ax.set_xticks(range(1, len(labels) + 1))
+                ax.set_xticklabels(labels, fontsize=10)
+                ax.set_ylabel('Reconstruction Error (%)', fontsize=10)
+                ax.set_title(event, fontsize=11, fontweight='bold')
+                ax.grid(axis='y', alpha=0.3)
+
+        # Hide any unused subplots (if less than 8 events)
+        for idx in range(len(events), 8):
+            axes[idx].axis('off')
 
         plt.tight_layout()
         plot_path = os.path.join(output_dir, "condition_deviation_comparison.png")
@@ -524,35 +568,54 @@ class DeviationAnalysis:
         print(f"Saved condition deviation plot: {plot_path}")
 
     @staticmethod
-    def visualise_event_deviation(results_dict, output_dir, title, color='#3182BD'):
+    def visualise_event_deviation(results_dict, output_dir, title):
         """
         Create visualisation for event-based deviation analysis using box plots.
-        Shows per-participant distribution of reconstruction errors.
+        Shows per-participant distribution of reconstruction errors with conditions side-by-side.
         """
         os.makedirs(output_dir, exist_ok=True)
 
         # Prepare data for plotting - aggregate per participant
         plot_data = []
         for key, result in results_dict.items():
-            per_participant = pd.DataFrame({
-                'Participant': result['participants'],
-                'Percentage_Error': result['percentage_errors']
-            }).groupby('Participant')['Percentage_Error'].mean().reset_index()
+            if isinstance(result, dict) and 'percentage_errors' in result:
+                # Old format (single condition) - shouldn't happen with new code
+                per_participant = pd.DataFrame({
+                    'Participant': result['participants'],
+                    'Percentage_Error': result['percentage_errors']
+                }).groupby('Participant')['Percentage_Error'].mean().reset_index()
 
-            for _, row in per_participant.iterrows():
-                plot_data.append({
-                    'Event': key,
-                    'Percentage_Error': row['Percentage_Error']
-                })
+                for _, row in per_participant.iterrows():
+                    plot_data.append({
+                        'Event': key,
+                        'Condition': 'Normal',
+                        'Percentage_Error': row['Percentage_Error']
+                    })
+            else:
+                # New format (multiple conditions)
+                for condition, cond_result in result.items():
+                    per_participant = pd.DataFrame({
+                        'Participant': cond_result['participants'],
+                        'Percentage_Error': cond_result['percentage_errors']
+                    }).groupby('Participant')['Percentage_Error'].mean().reset_index()
+
+                    for _, row in per_participant.iterrows():
+                        plot_data.append({
+                            'Event': key,
+                            'Condition': condition,
+                            'Percentage_Error': row['Percentage_Error']
+                        })
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Create box plot
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # Create box plot with conditions side-by-side
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-        sns.boxplot(data=df_plot, x='Event', y='Percentage_Error',
-                    color=color, ax=ax, showfliers=False)
+        # Define colours for conditions
+        condition_colours = {'Normal': '#3182BD', 'AR': '#2ECC71', 'VR': '#E74C3C'}
 
+        sns.boxplot(data=df_plot, x='Event', y='Percentage_Error', hue='Condition',
+                    palette=condition_colours, ax=ax, showfliers=False)
         ax.set_xlabel('Event Projection', fontsize=12, fontweight='bold')
         ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
@@ -641,7 +704,7 @@ if __name__ == "__main__":
         out_root=out_root,
         results_dir=results_dir,
         all_events=events_to_test,
-        condition="Normal",
+        conditions=["Normal", "AR", "VR"],  # All three conditions
         test_participants=test_participants,
         minimal_results_dir=minimal_results_dir,
         datatype=datatype,
@@ -657,8 +720,7 @@ if __name__ == "__main__":
     # Visualise normative gait results
     DeviationAnalysis.visualise_event_deviation(
         normative_results, normative_output_dir,
-        "Deviation from Normative Gait (Straight Walk)",
-        color='#27AE60'
+        "Deviation from Normative Gait (Straight Walk)"
     )
 
     # b. Biomechanically Related Event Pairs
@@ -675,7 +737,7 @@ if __name__ == "__main__":
         out_root=out_root,
         results_dir=results_dir,
         event_pairs=event_pairs,
-        condition="Normal",
+        conditions=["Normal", "AR", "VR"],  # All three conditions
         test_participants=test_participants,
         minimal_results_dir=minimal_results_dir,
         datatype=datatype,
@@ -691,8 +753,7 @@ if __name__ == "__main__":
     # Visualise related events results
     DeviationAnalysis.visualise_event_deviation(
         related_events_results, related_output_dir,
-        "Deviation Between Biomechanically Related Events",
-        color='#8E44AD'
+        "Deviation Between Biomechanically Related Events"
     )
 
     # 3. COMBINED SUMMARY
