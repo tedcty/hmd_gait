@@ -741,7 +741,7 @@ def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition)
 
 if __name__ == "__main__":
     # Toggle for minimal IMU set
-    USE_MINIMAL_IMU_SET = True  # Set to True to use only Head_imu and RightForeArm_imu
+    USE_MINIMAL_IMU_SET = False  # Set to True to use only Head_imu and RightForeArm_imu
     
     # Set up paths
     out_root = "Z:/Upper Body/Results/30 Participants/features"
@@ -968,9 +968,8 @@ if __name__ == "__main__":
         # Axes formatting
         ax.set_xticks(range(1, len(labels_to_use) + 1))
         ax.set_xticklabels(labels_to_use, fontsize=11)
-        ax.set_xlabel("Condition", fontsize=12, fontweight='bold')
-        ax.set_ylabel("Reconstruction Error (%)", fontsize=12, fontweight='bold')
-        ax.set_title(f"{event}", fontsize=13, fontweight='bold')
+        ax.set_xlabel("Condition", fontsize=12)
+        ax.set_ylabel("Reconstruction Error (%)", fontsize=12)
         ax.grid(axis="y", alpha=0.3)
         
         plt.tight_layout()
