@@ -380,7 +380,7 @@ class NormativePCAModel:
         # Determine event-specific folds JSON path
         folds_json_path = None
         if folds_base_dir:
-            folds_json_path = os.path.join(folds_base_dir, f"{event_filename}_folds.json")
+            folds_json_path = os.path.join(folds_base_dir, f"{event_filename}.json")
             if not os.path.exists(folds_json_path):
                 print(f"Event-specific folds file not found: {folds_json_path}")
                 folds_json_path = None
