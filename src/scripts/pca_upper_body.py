@@ -483,7 +483,7 @@ class NormativePCAModel:
                         if len(X_test) > 0:
                             # Use optimization-based fitting instead of direct projection
                             print(f"Fitting test data to PCA model using optimization...")
-                            modes = list(range(n_components_fold))
+                            modes = np.arange(n_components_fold, dtype=int)
                             test_scores, X_reconstructed, reconstruction_errors, percentage_errors = fit_to_pca_model(
                                 X_test.values, pc, modes, m_weight=1.0, verbose=True
                             )
