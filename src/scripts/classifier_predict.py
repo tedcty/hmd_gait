@@ -24,7 +24,7 @@ class ClassifierDeviationAnalysis:
         # Determine model directory based on minimal IMU set flag
         if minimal_imu_set:
             model_file = os.path.join(
-                results_dir,
+                minimal_results_dir,
                 event_filename,
                 "product_usecase_right",
                 "top_100",
