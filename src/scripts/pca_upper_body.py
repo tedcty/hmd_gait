@@ -728,7 +728,7 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     """
     n_samples = X_test.shape[0]
     
-    # Convert modes to numpy array with integer dtype (CRITICAL FIX)
+    # Convert modes to numpy array with integer dtype
     modes = np.asarray(modes, dtype=np.intp)
     n_modes = len(modes)
     
