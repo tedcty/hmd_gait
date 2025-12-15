@@ -186,7 +186,7 @@ class DeviationAnalysis:
                 Minimizes: ||X - X_recon||^2 + m_weight * ||weights_sd||^2
                 """
                 # Convert SD weights to actual weights using GIAS3 method
-                weights = pc.getWeightsBySD(weights_sd, modes)
+                weights = pc.getWeightsBySD(modes, weights_sd)
                 
                 # Reconstruct: X_recon = mean + (modes @ weights)
                 X_recon = mean + modes_matrix @ weights
@@ -210,7 +210,7 @@ class DeviationAnalysis:
             scores_opt[i, :] = xopt
             
             # Reconstruct with optimized weights
-            weights_opt = pc.getWeightsBySD(xopt, modes)
+            weights_opt = pc.getWeightsBySD(modes, xopt)
             X_reconstructed[i, :] = mean + modes_matrix @ weights_opt
             
             if verbose and (i + 1) % 100 == 0:
