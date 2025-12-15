@@ -28,7 +28,7 @@ class ClassifierDeviationAnalysis:
                 event_filename,
                 "product_usecase_right",
                 "top_100",
-                f"{datatype}_{event}_final_product_usecase_right_top100_rf_model.pkl"
+                f"{datatype}_{event_filename}_final_product_usecase_right_top100_rf_model.pkl"
             )
         else:
             model_file = os.path.join(
@@ -36,7 +36,7 @@ class ClassifierDeviationAnalysis:
                 datatype,
                 event_filename,
                 "top_100",
-                f"{datatype}_{event}_final_top100_rf_model.pkl"
+                f"{datatype}_{event_filename}_final_top100_rf_model.pkl"
             )
         
         if not os.path.exists(model_file):
