@@ -15,7 +15,7 @@ class ClassifierDeviationAnalysis:
     """
 
     @staticmethod
-    def load_classifier(results_dir, event, datatype="IMU", minimal_imu_set=False):
+    def load_classifier(results_dir, event, datatype="IMU", minimal_imu_set=False, minimal_results_dir=None):
         """
         Load a trained Random Forest classifier for a specific event.
         """
@@ -23,6 +23,8 @@ class ClassifierDeviationAnalysis:
         
         # Determine model directory based on minimal IMU set flag
         if minimal_imu_set:
+            if minimal_results_dir is None:
+                raise ValueError("minimal_results_dir must be provided when minimal_imu_set=True")
             model_file = os.path.join(
                 minimal_results_dir,
                 event_filename,
@@ -199,7 +201,7 @@ class ClassifierDeviationAnalysis:
                 # Load Straight walk classifier for this condition
                 try:
                     clf_target = ClassifierDeviationAnalysis.load_classifier(
-                        results_dir, target_event, datatype, minimal_imu_set
+                        results_dir, target_event, datatype, minimal_imu_set, minimal_results_dir
                     )
                     print(f"  Loaded Straight walk {condition} classifier")
                 except Exception as e:
@@ -299,7 +301,7 @@ class ClassifierDeviationAnalysis:
                 # Load target event's classifier for this condition
                 try:
                     clf_target = ClassifierDeviationAnalysis.load_classifier(
-                        results_dir, target_event, datatype, minimal_imu_set
+                        results_dir, target_event, datatype, minimal_imu_set, minimal_results_dir
                     )
                     print(f"  Loaded {target_event} {condition} classifier")
                 except Exception as e:
