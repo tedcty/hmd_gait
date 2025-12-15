@@ -725,31 +725,20 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     Fit test data to PCA model by optimizing PCA scores to minimize reconstruction error.
     
     Based on fitSSMTo3DPoints from gias3.learning.PCA_fitting, adapted for feature data.
-    This optimization-based approach finds the best PCA weights that reconstruct the test data.
     """
     n_samples = X_test.shape[0]
-    n_features = X_test.shape[1]
     n_modes = len(modes)
     
     # Get PCA components for selected modes
     mean = pc.mean
     modes_matrix = pc.modes[:, modes]  # (features, n_modes)
     
-    # Get eigenvalues for selected modes (for converting SD weights to actual weights)
-    if hasattr(pc, 'eigenvalues') and pc.eigenvalues is not None:
-        eigenvalues = pc.eigenvalues[modes]
-        sd_scales = np.sqrt(eigenvalues)
-    else:
-        # Fallback: assume unit scaling
-        sd_scales = np.ones(n_modes)
-    
     # Store optimized scores
     scores_opt = np.zeros((n_samples, n_modes))
     X_reconstructed = np.zeros_like(X_test)
     
-    def mahalanobis(x):
-        """Mahalanobis distance for PCA weights in standard deviation units"""
-        return np.sqrt(np.sum(x ** 2))
+    # Precompute penalty scaling
+    penalty_scale = np.sqrt(m_weight)
     
     # Optimize for each sample
     for i in range(n_samples):
@@ -758,9 +747,11 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
         def objective(weights_sd):
             """
             Objective function: reconstruction error + Mahalanobis penalty
+            
+            Minimizes: ||X - X_recon||^2 + m_weight * ||weights_sd||^2
             """
-            # Convert SD weights to actual weights
-            weights = weights_sd * sd_scales
+            # Convert SD weights to actual weights using GIAS3 method
+            weights = pc.getWeightsBySD(weights_sd, modes)
             
             # Reconstruct: X_recon = mean + (modes @ weights)
             X_recon = mean + modes_matrix @ weights
@@ -768,11 +759,11 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
             # Reconstruction error per feature
             recon_error = target - X_recon
             
-            # Mahalanobis penalty (distributed across features for leastsq)
-            m_penalty = mahalanobis(weights_sd) * m_weight / np.sqrt(n_features)
+            # Mahalanobis penalty as vector (one per mode)
+            penalty_vector = penalty_scale * weights_sd
             
-            # Return residuals with penalty added uniformly
-            return np.append(recon_error, m_penalty)
+            # Return combined residuals
+            return np.append(recon_error, penalty_vector)
         
         # Initial guess: zero weights (mean shape)
         x0 = np.zeros(n_modes)
@@ -784,7 +775,7 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
         scores_opt[i, :] = xopt
         
         # Reconstruct with optimized weights
-        weights_opt = xopt * sd_scales
+        weights_opt = pc.getWeightsBySD(xopt, modes)
         X_reconstructed[i, :] = mean + modes_matrix @ weights_opt
         
         if verbose and (i + 1) % 100 == 0:
