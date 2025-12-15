@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from gias3.learning.PCA import PCA
 import traceback
+from multiprocessing import Pool
+from scipy.optimize import leastsq
 
 
 class NormativePCAModel:
@@ -470,7 +472,7 @@ class NormativePCAModel:
                     'n_train_participants': len(train_participants)
                 })
                 
-                # Project test data into PCA space
+                # Project test data into PCA space using optimization-based fitting
                 if len(test_participants) > 0:
                     try:
                         X_test, y_test, groups_test, _ = NormativePCAModel.load_event_condition_data(
@@ -479,9 +481,12 @@ class NormativePCAModel:
                         )
                         
                         if len(X_test) > 0:
-                            # Project test data
-                            # GIAS3 PCA expects data as (features, samples)
-                            test_scores = pc.project(X_test.values.T).T  # Result is (samples, components)
+                            # Use optimization-based fitting instead of direct projection
+                            print(f"Fitting test data to PCA model using optimization...")
+                            modes = list(range(n_components_fold))
+                            test_scores, X_reconstructed, reconstruction_errors, percentage_errors = fit_to_pca_model(
+                                X_test.values, pc, modes, m_weight=1.0, verbose=True
+                            )
                             
                             # Save test projection scores
                             test_scores_df = pd.DataFrame(
@@ -494,22 +499,11 @@ class NormativePCAModel:
                             test_scores_df.to_csv(test_proj_path, index=False)
                             print(f"Saved test projections to {test_proj_path}")
                             
-                            # Compute reconstruction and variance metrics
-                            # Reconstruct from PCA space: X_reconstructed = mean + (scores @ loadings.T)
-                            X_reconstructed = pc.mean.reshape(-1, 1) + (pc.modes @ test_scores.T)
-                            X_reconstructed = X_reconstructed.T  # Back to (samples, features)
-                            
-                            # Compute reconstruction error per sample
-                            reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed) ** 2).sum(axis=1))
-                            
-                            # Compute original magnitude directly from test data
-                            original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
-                            
                             # Compute variance captured (squared norm of scores)
                             variance_captured = (test_scores ** 2).sum(axis=1)
                             
-                            # Calculate percentage error
-                            percentage_errors = (reconstruction_errors / original_magnitudes) * 100
+                            # Compute original magnitude directly from test data
+                            original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
                             
                             # Save variance metrics
                             variance_metrics = pd.DataFrame({
@@ -641,19 +635,6 @@ def aggregate_loadings(cv_dir, datatype, event_filename, condition, n_top_featur
     """
     Average loadings across folds and identify top features from PCs that cumulatively 
     explain at least 90% of variance.
-    
-    Args:
-        cv_dir: Directory containing CV results
-        datatype: Data type (e.g., 'IMU')
-        event_filename: Event name formatted for filenames
-        condition: Condition name (e.g., 'Normal', 'AR', 'VR')
-        n_top_features: Number of top features to return
-        variance_threshold: Cumulative variance threshold (default 0.90 for 90%)
-    
-    Returns:
-        mean_loadings: Mean loadings across folds
-        std_loadings: Standard deviation of loadings across folds
-        top_features_dict: Dictionary of top features with their PC and loading info
     """
     # Load all fold loadings
     fold_loadings = []
@@ -739,14 +720,112 @@ def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition)
     
     return combined, stats
 
+def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
+    """
+    Fit test data to PCA model by optimizing PCA scores to minimize reconstruction error.
+    
+    Based on fitSSMTo3DPoints from gias3.learning.PCA_fitting, adapted for feature data.
+    This optimization-based approach finds the best PCA weights that reconstruct the test data.
+    """
+    n_samples = X_test.shape[0]
+    n_features = X_test.shape[1]
+    n_modes = len(modes)
+    
+    # Get PCA components for selected modes
+    mean = pc.mean
+    modes_matrix = pc.modes[:, modes]  # (features, n_modes)
+    
+    # Get eigenvalues for selected modes (for converting SD weights to actual weights)
+    if hasattr(pc, 'eigenvalues') and pc.eigenvalues is not None:
+        eigenvalues = pc.eigenvalues[modes]
+        sd_scales = np.sqrt(eigenvalues)
+    else:
+        # Fallback: assume unit scaling
+        sd_scales = np.ones(n_modes)
+    
+    # Store optimized scores
+    scores_opt = np.zeros((n_samples, n_modes))
+    X_reconstructed = np.zeros_like(X_test)
+    
+    def mahalanobis(x):
+        """Mahalanobis distance for PCA weights in standard deviation units"""
+        return np.sqrt(np.sum(x ** 2))
+    
+    # Optimize for each sample
+    for i in range(n_samples):
+        target = X_test[i, :]
+        
+        def objective(weights_sd):
+            """
+            Objective function: reconstruction error + Mahalanobis penalty
+            """
+            # Convert SD weights to actual weights
+            weights = weights_sd * sd_scales
+            
+            # Reconstruct: X_recon = mean + (modes @ weights)
+            X_recon = mean + modes_matrix @ weights
+            
+            # Reconstruction error per feature
+            recon_error = target - X_recon
+            
+            # Mahalanobis penalty (distributed across features for leastsq)
+            m_penalty = mahalanobis(weights_sd) * m_weight / np.sqrt(n_features)
+            
+            # Return residuals with penalty added uniformly
+            return np.append(recon_error, m_penalty)
+        
+        # Initial guess: zero weights (mean shape)
+        x0 = np.zeros(n_modes)
+        
+        # Optimize using least squares
+        xopt = leastsq(objective, x0, xtol=1e-6, ftol=1e-6)[0]
+        
+        # Store optimized scores (in SD units)
+        scores_opt[i, :] = xopt
+        
+        # Reconstruct with optimized weights
+        weights_opt = xopt * sd_scales
+        X_reconstructed[i, :] = mean + modes_matrix @ weights_opt
+        
+        if verbose and (i + 1) % 100 == 0:
+            print(f"    Fitted {i + 1}/{n_samples} samples")
+    
+    # Compute reconstruction errors
+    reconstruction_errors = np.sqrt(((X_test - X_reconstructed) ** 2).sum(axis=1))
+    original_magnitudes = np.sqrt((X_test ** 2).sum(axis=1))
+    percentage_errors = (reconstruction_errors / original_magnitudes) * 100
+    
+    if verbose:
+        print(f"    Mean reconstruction error: {reconstruction_errors.mean():.4f}")
+        print(f"    Mean percentage error: {percentage_errors.mean():.2f}%")
+    
+    return scores_opt, X_reconstructed, reconstruction_errors, percentage_errors
+
+def process_single_event(args):
+    """Wrapper for processing a single event-condition in parallel"""
+    event_condition, out_root, datatype, results_dir, n_components, folds_base_dir, USE_MINIMAL_IMU_SET, minimal_results_dir = args
+    
+    try:
+        cv_result = NormativePCAModel.create_normative_pca_models_cv(
+            out_root, datatype, event_condition, results_dir, 
+            n_components=n_components, folds_base_dir=folds_base_dir,
+            minimal_imu_set=USE_MINIMAL_IMU_SET,
+            minimal_results_dir=minimal_results_dir
+        )
+        return cv_result
+    except Exception as e:
+        print(f"Error processing {event_condition}: {e}")
+        traceback.print_exc()
+        return None
+
 if __name__ == "__main__":
     # Toggle for minimal IMU set
     USE_MINIMAL_IMU_SET = False  # Set to True to use only Head_imu and RightForeArm_imu
     
     # Set up paths
-    out_root = "Z:/Upper Body/Results/30 Participants/features"
-    results_dir = "Z:/Upper Body/Results/30 Participants/models"
-    minimal_results_dir = "Z:/Upper Body/Results/30 Participants/minimal_imu_models"
+    out_root = "/hpc/vlee669/Results/30 Participants/features"
+    results_dir = "/hpc/vlee669/Results/30 Participants/models"
+    minimal_results_dir = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"
     
     # Create results directory if it doesn't exist
     os.makedirs(results_dir, exist_ok=True)
@@ -783,28 +862,19 @@ if __name__ == "__main__":
     print("CROSS-VALIDATION MODE: Training 5-fold CV PCA models")
     print(f"{'='*60}\n")
     
-    for event_condition in available_data.keys():
-        participants = available_data[event_condition]
-        print(f"\n{'='*50}")
-        print(f"Processing event-condition: {event_condition}")
-        print(f"Available participants: {participants}")
-        
-        try:
-            cv_result = NormativePCAModel.create_normative_pca_models_cv(
-                out_root, datatype, event_condition, results_dir, 
-                n_components=n_components, folds_base_dir=folds_base_dir,
-                minimal_imu_set=USE_MINIMAL_IMU_SET,
-                minimal_results_dir=minimal_results_dir
-            )
-            
-            if cv_result:
-                performance_results.append(cv_result)
-                print(f"Successfully processed {event_condition} with CV")
-            
-        except Exception as e:
-            print(f"Error processing {event_condition}: {e}")
-            traceback.print_exc()
-            continue
+    # Prepare arguments for parallel processing
+    process_args = [
+        (event_condition, out_root, datatype, results_dir, n_components, 
+         folds_base_dir, USE_MINIMAL_IMU_SET, minimal_results_dir)
+        for event_condition in available_data.keys()
+    ]
+
+    with Pool(processes=36) as pool:
+        results = pool.map(process_single_event, process_args)
+    
+    for cv_result in results:
+        if cv_result:
+            performance_results.append(cv_result)
     
     print(f"\n{'='*60}")
     print(f"CV-based PCA model creation completed for all event-condition combinations.")
