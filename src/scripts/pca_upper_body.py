@@ -727,6 +727,9 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     Based on fitSSMTo3DPoints from gias3.learning.PCA_fitting, adapted for feature data.
     """
     n_samples = X_test.shape[0]
+    
+    # Convert modes to numpy array with integer dtype (CRITICAL FIX)
+    modes = np.asarray(modes, dtype=np.int64)
     n_modes = len(modes)
     
     # Get PCA components for selected modes
