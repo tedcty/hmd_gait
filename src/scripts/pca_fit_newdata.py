@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from gias3.learning.PCA import loadPrincipalComponents
+from scipy.optimize import leastsq
 import json
 from pathlib import Path
 
@@ -153,26 +154,94 @@ class DeviationAnalysis:
         return X, y, groups
 
     @staticmethod
+    def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
+        """
+        Fit test data to PCA model by optimizing PCA scores to minimize reconstruction error.
+        
+        Based on fitSSMTo3DPoints from gias3.learning.PCA_fitting, adapted for feature data.
+        This optimization-based approach finds the best PCA weights that reconstruct the test data.
+        """
+        n_samples = X_test.shape[0]
+        n_modes = len(modes)
+        
+        # Get PCA components for selected modes
+        mean = pc.mean
+        modes_matrix = pc.modes[:, modes]  # (features, n_modes)
+        
+        # Store optimized scores
+        scores_opt = np.zeros((n_samples, n_modes))
+        X_reconstructed = np.zeros_like(X_test)
+        
+        # Precompute penalty scaling
+        penalty_scale = np.sqrt(m_weight)
+        
+        # Optimize for each sample
+        for i in range(n_samples):
+            target = X_test[i, :]
+            
+            def objective(weights_sd):
+                """
+                Objective function: reconstruction error + Mahalanobis penalty
+                
+                Minimizes: ||X - X_recon||^2 + m_weight * ||weights_sd||^2
+                """
+                # Convert SD weights to actual weights using GIAS3 method
+                weights = pc.getWeightsBySD(weights_sd, modes)
+                
+                # Reconstruct: X_recon = mean + (modes @ weights)
+                X_recon = mean + modes_matrix @ weights
+                
+                # Reconstruction error per feature
+                recon_error = target - X_recon
+                
+                # Mahalanobis penalty as vector (one per mode)
+                penalty_vector = penalty_scale * weights_sd
+                
+                # Return combined residuals
+                return np.append(recon_error, penalty_vector)
+            
+            # Initial guess: zero weights (mean shape)
+            x0 = np.zeros(n_modes)
+            
+            # Optimize using least squares
+            xopt = leastsq(objective, x0, xtol=1e-6, ftol=1e-6)[0]
+            
+            # Store optimized scores (in SD units)
+            scores_opt[i, :] = xopt
+            
+            # Reconstruct with optimized weights
+            weights_opt = pc.getWeightsBySD(xopt, modes)
+            X_reconstructed[i, :] = mean + modes_matrix @ weights_opt
+            
+            if verbose and (i + 1) % 100 == 0:
+                print(f"    Fitted {i + 1}/{n_samples} samples")
+        
+        # Compute reconstruction errors
+        reconstruction_errors = np.sqrt(((X_test - X_reconstructed) ** 2).sum(axis=1))
+        original_magnitudes = np.sqrt((X_test ** 2).sum(axis=1))
+        percentage_errors = (reconstruction_errors / original_magnitudes) * 100
+        
+        if verbose:
+            print(f"    Mean reconstruction error: {reconstruction_errors.mean():.4f}")
+            print(f"    Mean percentage error: {percentage_errors.mean():.2f}%")
+        
+        return scores_opt, X_reconstructed, reconstruction_errors, percentage_errors
+
+    @staticmethod
     def compute_reconstruction_error(pc, X_test):
         """
-        Compute reconstruction error for test data projected into PCA space.
+        Compute reconstruction error for test data using optimization-based PCA fitting.
+        Uses least squares optimization to find best-fit PCA scores with Mahalanobis regularization.
         """
-        # Project test data into PCA space
-        # GIAS3 PCA expects data as (features, samples)
-        test_scores = pc.project(X_test.values.T).T  # Result is (samples, components)
-
-        # Reconstruct from PCA space: X_reconstructed = mean + (scores @ loadings.T)
-        X_reconstructed = pc.mean.reshape(-1, 1) + (pc.modes @ test_scores.T)
-        X_reconstructed = X_reconstructed.T  # Back to (samples, features)
-
-        # Compute reconstruction error per sample (L2 norm)
-        reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed) ** 2).sum(axis=1))
-
-        # Compute original data magnitude
-        original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
-
-        # Compute percentage error
-        percentage_errors = (reconstruction_errors / (original_magnitudes + 1e-10)) * 100
+        # Use optimization-based fitting instead of direct projection
+        n_components = pc.modes.shape[1]
+        modes = list(range(n_components))
+        
+        print(f"    Fitting {len(X_test)} samples to PCA model using optimization...")
+        test_scores, X_reconstructed, reconstruction_errors, percentage_errors = \
+            DeviationAnalysis.fit_to_pca_model(
+                X_test.values, pc, modes, m_weight=1.0, verbose=True
+            )
 
         return reconstruction_errors, percentage_errors, X_reconstructed, test_scores
 
@@ -632,10 +701,10 @@ class DeviationAnalysis:
 
 if __name__ == "__main__":
     # Configuration
-    out_root = "Z:/Upper Body/Results/30 Participants/features"
-    results_dir = "Z:/Upper Body/Results/30 Participants/models"
-    minimal_results_dir = "Z:/Upper Body/Results/30 Participants/minimal_imu_models"
-    output_dir = "Z:/Upper Body/Results/30 Participants/deviation_analysis"
+    out_root = "/hpc/vlee669/Results/30 Participants/features"
+    results_dir = "/hpc/vlee669/Results/30 Participants/models"
+    minimal_results_dir = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"
+    output_dir = "/hpc/vlee669/Results/30 Participants/deviation_analysis"
 
     datatype = "IMU"
     minimal_imu_set = True  # Use only Head_imu and RightForeArm_imu
