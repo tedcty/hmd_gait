@@ -729,7 +729,7 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     n_samples = X_test.shape[0]
     
     # Convert modes to numpy array with integer dtype (CRITICAL FIX)
-    modes = np.asarray(modes, dtype=np.int64)
+    modes = np.asarray(modes, dtype=int)
     n_modes = len(modes)
     
     # Get PCA components for selected modes
