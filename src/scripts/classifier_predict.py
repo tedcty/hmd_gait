@@ -228,6 +228,9 @@ class ClassifierDeviationAnalysis:
                     print(f"  No test data available for {source_event} - {condition}")
                     continue
 
+                # Convert to numpy array to avoid feature name checking
+                X_test = X_test.values
+
                 # Predict using Straight walk classifier
                 y_pred = clf_target.predict(X_test)
 
@@ -327,6 +330,9 @@ class ClassifierDeviationAnalysis:
                 if X_test is None or len(X_test) == 0:
                     print(f"  No test data available for {source_event} - {condition}")
                     continue
+
+                # Convert to numpy array to avoid feature name checking
+                X_test = X_test.values
 
                 # Predict using target event's classifier
                 y_pred = clf_target.predict(X_test)
