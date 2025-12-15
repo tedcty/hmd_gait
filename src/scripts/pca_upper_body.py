@@ -727,9 +727,6 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     Based on fitSSMTo3DPoints from gias3.learning.PCA_fitting, adapted for feature data.
     """
     n_samples = X_test.shape[0]
-    
-    # Convert modes to numpy array with integer dtype
-    modes = np.asarray(modes, dtype=np.intp)
     n_modes = len(modes)
     
     # Get PCA components for selected modes
@@ -754,7 +751,7 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
             Minimizes: ||X - X_recon||^2 + m_weight * ||weights_sd||^2
             """
             # Convert SD weights to actual weights using GIAS3 method
-            weights = pc.getWeightsBySD(weights_sd, modes)
+            weights = pc.getWeightsBySD(modes, weights_sd)
             
             # Reconstruct: X_recon = mean + (modes @ weights)
             X_recon = mean + modes_matrix @ weights
@@ -778,7 +775,7 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
         scores_opt[i, :] = xopt
         
         # Reconstruct with optimized weights
-        weights_opt = pc.getWeightsBySD(xopt, modes)
+        weights_opt = pc.getWeightsBySD(modes, xopt)
         X_reconstructed[i, :] = mean + modes_matrix @ weights_opt
         
         if verbose and (i + 1) % 100 == 0:
