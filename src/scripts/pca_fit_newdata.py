@@ -228,16 +228,21 @@ class DeviationAnalysis:
         return scores_opt, X_reconstructed, reconstruction_errors, percentage_errors
 
     @staticmethod
-    def compute_reconstruction_error(pc, X_test):
+    def compute_reconstruction_error(pc, X_test, n_participants=30):
         """
         Compute reconstruction error for test data using optimization-based PCA fitting.
         Uses least squares optimization to find best-fit PCA scores with Mahalanobis regularization.
+
+        n_participants controls the number of PCs used for reconstruction:
+        modes_used = n_participants - 1
         """
-        # Use optimization-based fitting instead of direct projection
-        n_components = pc.modes.shape[1]
-        modes = list(range(n_components))
+        max_available = pc.modes.shape[1]  # How many PCs exist in the trained model
+        n_modes_to_use = min(n_participants - 1, max_available)
+        modes = list(range(n_modes_to_use))
         
         print(f"    Fitting {len(X_test)} samples to PCA model using optimization...")
+        print(f"    Using {n_modes_to_use}/{max_available} PCA modes (n_participants - 1)")
+
         test_scores, X_reconstructed, reconstruction_errors, percentage_errors = \
             DeviationAnalysis.fit_to_pca_model(
                 X_test.values, pc, modes, m_weight=1.0, verbose=True
