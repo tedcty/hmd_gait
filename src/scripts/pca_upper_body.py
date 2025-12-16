@@ -1108,6 +1108,9 @@ if __name__ == "__main__":
             feature_stds[feature_stds == 0] = 1.0  # Prevent division by zero
             X_all_standardised = (X_all - feature_means) / feature_stds
 
+            # Define outname before using it
+            outname = f"{datatype}_{event_filename}_{condition}"
+
             # Save means and stds for later use
             means_path = os.path.join(pc_model_dir, f"{outname}_feature_means.csv")
             stds_path = os.path.join(pc_model_dir, f"{outname}_feature_stds.csv")
