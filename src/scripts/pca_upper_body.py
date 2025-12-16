@@ -1102,10 +1102,24 @@ if __name__ == "__main__":
             print(f"  Total samples: {len(X_all)}")
             print(f"  Total features: {len(feature_names)}")
             
-            # Build PCA model
+            # === STANDARDISE FEATURES (Z-SCORE) ===
+            feature_means = X_all.mean(axis=0)
+            feature_stds = X_all.std(axis=0)
+            feature_stds[feature_stds == 0] = 1.0  # Prevent division by zero
+            X_all_standardised = (X_all - feature_means) / feature_stds
+
+            # Save means and stds for later use
+            means_path = os.path.join(pc_model_dir, f"{outname}_feature_means.csv")
+            stds_path = os.path.join(pc_model_dir, f"{outname}_feature_stds.csv")
+            feature_means.to_csv(means_path)
+            feature_stds.to_csv(stds_path)
+            print(f"  Saved feature means to: {means_path}")
+            print(f"  Saved feature stds to: {stds_path}")
+            
+            # Build PCA model on standardised data
             print("  Building PCA model...")
             pca = PCA()
-            pca.setData(X_all.values.T)  # Transpose to (features, samples)
+            pca.setData(X_all_standardised.values.T)  # Transpose to (features, samples)
             pca.inc_svd_decompose(None)  # Use all components
             pc = pca.PC
             
@@ -1154,7 +1168,7 @@ if __name__ == "__main__":
             print(f"  Saved loadings to: {loadings_path}")
             
             # Project all data into final PCA space
-            all_scores = pc.project(X_all.values.T).T  # (samples, components)
+            all_scores = pc.project(X_all_standardised.values.T).T  # (samples, components)
 
             # Save final model projection scores
             all_scores_df = pd.DataFrame(
