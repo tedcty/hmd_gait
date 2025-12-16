@@ -424,10 +424,16 @@ class NormativePCAModel:
                 if len(X_train) == 0:
                     print(f"Warning: No training data for fold {fold_idx}")
                     continue
+
+                # === STANDARDISE FEATURES (Z-SCORE) ===
+                feature_means = X_train.mean(axis=0)
+                feature_stds = X_train.std(axis=0)
+                feature_stds[feature_stds == 0] = 1.0  # Prevent division by zero
+                X_train_standardised = (X_train - feature_means) / feature_stds
                 
-                # Fit PCA on training data
+                # Fit PCA on standardised training data
                 pca = PCA()
-                pca.setData(X_train.values.T)  # Transpose to (features, samples)
+                pca.setData(X_train_standardised.values.T)  # Transpose to (features, samples)
                 pca.inc_svd_decompose(n_components_fold)
                 pc = pca.PC
                 
@@ -481,12 +487,20 @@ class NormativePCAModel:
                         )
                         
                         if len(X_test) > 0:
+                            # === STANDARDISE TEST DATA USING TRAINING STATISTICS ===
+                            X_test_standardised = (X_test - feature_means) / feature_stds
                             # Use optimization-based fitting instead of direct projection
                             print(f"Fitting test data to PCA model using optimization...")
                             modes = np.arange(n_components_fold, dtype=int)
                             test_scores, X_reconstructed, reconstruction_errors, percentage_errors = fit_to_pca_model(
-                                X_test.values, pc, modes, m_weight=1.0, verbose=True
+                                X_test_standardised.values, pc, modes, m_weight=1.0, verbose=True
                             )
+
+                            # === DE-STANDARDISE RECONSTRUCTED DATA FOR ERROR CALCULATION ===
+                            X_reconstructed_original = (X_reconstructed * feature_stds.values) + feature_means.values
+                            reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed_original) ** 2).sum(axis=1))
+                            original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
+                            percentage_errors = (reconstruction_errors / original_magnitudes) * 100
                             
                             # Save test projection scores
                             test_scores_df = pd.DataFrame(
@@ -509,7 +523,7 @@ class NormativePCAModel:
                             variance_metrics = pd.DataFrame({
                                 'Participant': groups_test,
                                 'Reconstruction_Error': reconstruction_errors,
-                                'Variance_Captured': variance_captured,
+                                'Variance_Captured': (test_scores ** 2).sum(axis=1),
                                 'Original_Magnitude': original_magnitudes,
                                 'Percentage_Error': percentage_errors
                             })
