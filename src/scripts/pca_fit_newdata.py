@@ -154,6 +154,35 @@ class DeviationAnalysis:
         return X, y, groups
 
     @staticmethod
+    def load_feature_means_stds(results_dir, event, condition, datatype="IMU"):
+        """
+        Load feature means and stds saved with the PCA model.
+        """
+        event_filename = event.replace(' ', '_')
+        means_path = os.path.join(
+            results_dir, "pca_models", event_filename, condition, "pc_model_minimal",
+            f"{datatype}_{event_filename}_{condition}_feature_means.csv"
+        )
+        stds_path = os.path.join(
+            results_dir, "pca_models", event_filename, condition, "pc_model_minimal",
+            f"{datatype}_{event_filename}_{condition}_feature_stds.csv"
+        )
+        if not os.path.exists(means_path) or not os.path.exists(stds_path):
+            raise FileNotFoundError(f"Feature means or stds not found for {event} {condition}")
+        means = pd.read_csv(means_path, index_col=0, squeeze=True)
+        stds = pd.read_csv(stds_path, index_col=0, squeeze=True)
+        return means, stds
+
+    @staticmethod
+    def standardise_X(X, means, stds):
+        """
+        Standardise X using provided means and stds (z-score).
+        """
+        stds = stds.copy()
+        stds[stds == 0] = 1.0
+        return (X - means) / stds
+
+    @staticmethod
     def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
         """
         Fit test data to PCA model by optimizing PCA scores to minimize reconstruction error.
@@ -308,6 +337,10 @@ class DeviationAnalysis:
                     print(f"  No test data available for {test_condition}")
                     continue
 
+                # Standardise features
+                means, stds = DeviationAnalysis.load_feature_means_stds(results_dir, event, "Normal", datatype)
+                X_test = DeviationAnalysis.standardise_X(X_test, means, stds)
+
                 # Compute reconstruction error
                 recon_errors, percent_errors, X_recon, scores = DeviationAnalysis.compute_reconstruction_error(
                     pc_normal, X_test)
@@ -392,6 +425,10 @@ class DeviationAnalysis:
                 if X_test is None or len(X_test) == 0:
                     print(f"  No test data available for {source_event} - {condition}")
                     continue
+
+                # Standardise features
+                means, stds = DeviationAnalysis.load_feature_means_stds(results_dir, target_event, condition, datatype)
+                X_test = DeviationAnalysis.standardise_X(X_test, means, stds)
 
                 # Compute reconstruction error
                 recon_errors, percent_errors, X_recon, scores = \
@@ -478,6 +515,10 @@ class DeviationAnalysis:
                 if X_test is None or len(X_test) == 0:
                     print(f"  No test data available for {event} - {condition}")
                     continue
+
+                # Standardise features
+                means, stds = DeviationAnalysis.load_feature_means_stds(results_dir, normative_event, condition, datatype)
+                X_test = DeviationAnalysis.standardise_X(X_test, means, stds)
 
                 # Compute reconstruction error
                 recon_errors, percent_errors, X_recon, scores = \
