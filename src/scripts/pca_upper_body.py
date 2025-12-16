@@ -500,7 +500,7 @@ class NormativePCAModel:
                             X_reconstructed_original = (X_reconstructed * feature_stds.values) + feature_means.values
                             reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed_original) ** 2).sum(axis=1))
                             original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
-                            percentage_errors = (reconstruction_errors / original_magnitudes) * 100
+                            percentage_errors = (reconstruction_errors / (original_magnitudes + 1e-10)) * 100
                             
                             # Save test projection scores
                             test_scores_df = pd.DataFrame(
@@ -798,7 +798,7 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     # Compute reconstruction errors
     reconstruction_errors = np.sqrt(((X_test - X_reconstructed) ** 2).sum(axis=1))
     original_magnitudes = np.sqrt((X_test ** 2).sum(axis=1))
-    percentage_errors = (reconstruction_errors / original_magnitudes) * 100
+    percentage_errors = (reconstruction_errors / (original_magnitudes + 1e-10)) * 100
     
     if verbose:
         print(f"    Mean reconstruction error: {reconstruction_errors.mean():.4f}")
