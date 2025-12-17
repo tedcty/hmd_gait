@@ -420,6 +420,9 @@ class NormativePCAModel:
                     out_root, datatype, event_condition, train_participants, top_features, 
                     filter_event_only=True, minimal_imu_set=minimal_imu_set
                 )
+
+                # Ensure fixed, consistent column order (train)
+                X_train = X_train.reindex(columns=feature_names).fillna(0)
                 
                 if len(X_train) == 0:
                     print(f"Warning: No training data for fold {fold_idx}")
@@ -487,20 +490,23 @@ class NormativePCAModel:
                         )
                         
                         if len(X_test) > 0:
+                            # Align column order to training
+                            X_test = X_test.reindex(columns=feature_names)
+                            # Fill any missing columns with zeros
+                            X_test = X_test.fillna(0)
                             # === STANDARDISE TEST DATA USING TRAINING STATISTICS ===
                             X_test_standardised = (X_test - feature_means) / feature_stds
                             # Use optimization-based fitting instead of direct projection
                             print(f"Fitting test data to PCA model using optimization...")
                             modes = np.arange(n_components_fold, dtype=int)
-                            test_scores, X_reconstructed, reconstruction_errors, percentage_errors = fit_to_pca_model(
+                            test_scores, X_reconstructed, reconstruction_errors = fit_to_pca_model(
                                 X_test_standardised.values, pc, modes, m_weight=1.0, verbose=True
                             )
 
-                            # === DE-STANDARDISE RECONSTRUCTED DATA FOR ERROR CALCULATION ===
-                            X_reconstructed_original = (X_reconstructed * feature_stds.values) + feature_means.values
-                            reconstruction_errors = np.sqrt(((X_test.values - X_reconstructed_original) ** 2).sum(axis=1))
-                            original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
-                            percentage_errors = (reconstruction_errors / (original_magnitudes + 1e-10)) * 100
+                            # === CALCULATE RECONSTRUCTION ERROR IN STANDARDISED SPACE ===
+                            eps = 1e-12
+                            denom = np.linalg.norm(X_test_standardised.values, axis=1) + eps
+                            percentage_errors = (reconstruction_errors / denom) * 100
                             
                             # Save test projection scores
                             test_scores_df = pd.DataFrame(
@@ -516,15 +522,11 @@ class NormativePCAModel:
                             # Compute variance captured (squared norm of scores)
                             variance_captured = (test_scores ** 2).sum(axis=1)
                             
-                            # Compute original magnitude directly from test data
-                            original_magnitudes = np.sqrt((X_test.values ** 2).sum(axis=1))
-                            
                             # Save variance metrics
                             variance_metrics = pd.DataFrame({
                                 'Participant': groups_test,
                                 'Reconstruction_Error': reconstruction_errors,
                                 'Variance_Captured': (test_scores ** 2).sum(axis=1),
-                                'Original_Magnitude': original_magnitudes,
                                 'Percentage_Error': percentage_errors
                             })
                             
@@ -656,6 +658,9 @@ def aggregate_loadings(cv_dir, datatype, event_filename, condition, n_top_featur
         loadings_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_fold{fold_idx}_loadings.csv")
         if os.path.exists(loadings_path):
             fold_loadings.append(pd.read_csv(loadings_path, index_col=0))
+
+    if not fold_loadings:
+        return pd.DataFrame(), pd.DataFrame(), {}
     
     # Average across folds
     mean_loadings = pd.concat(fold_loadings).groupby(level=0).mean()
@@ -719,6 +724,15 @@ def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition)
         if os.path.exists(metrics_path):
             df = pd.read_csv(metrics_path)
             all_errors.append(df)
+    
+    if not all_errors:
+        return pd.DataFrame(), {
+            'mean_reconstruction_error': np.nan,
+            'std_reconstruction_error': np.nan,
+            'median_reconstruction_error': np.nan,
+            'mean_variance_captured': np.nan,
+            'std_variance_captured': np.nan
+        }
     
     # Combine all test participants
     combined = pd.concat(all_errors, ignore_index=True)
@@ -797,14 +811,11 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     
     # Compute reconstruction errors
     reconstruction_errors = np.sqrt(((X_test - X_reconstructed) ** 2).sum(axis=1))
-    original_magnitudes = np.sqrt((X_test ** 2).sum(axis=1))
-    percentage_errors = (reconstruction_errors / (original_magnitudes + 1e-10)) * 100
     
     if verbose:
         print(f"    Mean reconstruction error: {reconstruction_errors.mean():.4f}")
-        print(f"    Mean percentage error: {percentage_errors.mean():.2f}%")
-    
-    return scores_opt, X_reconstructed, reconstruction_errors, percentage_errors
+      
+    return scores_opt, X_reconstructed, reconstruction_errors
 
 def process_single_event(args):
     """Wrapper for processing a single event-condition in parallel"""
@@ -844,6 +855,8 @@ if __name__ == "__main__":
         print("=" * 60)
         print("MINIMAL IMU SET MODE: Using only Head_imu and RightForeArm_imu")
         print("=" * 60)
+
+    imu_suffix = "_minimal" if USE_MINIMAL_IMU_SET else ""
     
     # Path to directory containing event-specific fold JSON files
     folds_base_dir = os.path.join(results_dir, "cv_folds")
@@ -996,6 +1009,8 @@ if __name__ == "__main__":
             continue
         
         event_filename = event.replace(' ', '_')
+
+        imu_suffix = "_minimal" if USE_MINIMAL_IMU_SET else ""
         
         # Combine all conditions into one DataFrame
         plot_data = []
@@ -1094,6 +1109,9 @@ if __name__ == "__main__":
                 out_root, datatype, event_condition, all_participants, top_features, 
                 filter_event_only=True, minimal_imu_set=USE_MINIMAL_IMU_SET
             )
+
+            # Ensure fixed, consistent column order (final model)
+            X_all = X_all.reindex(columns=feature_names).fillna(0)
             
             if len(X_all) == 0:
                 print(f"  Warning: No data available for {event_condition}")
