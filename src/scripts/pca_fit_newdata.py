@@ -6,6 +6,7 @@ from gias3.learning.PCA import loadPrincipalComponents
 from scipy.optimize import leastsq
 import json
 from pathlib import Path
+from matplotlib.patches import Patch
 
 
 class DeviationAnalysis:
@@ -591,8 +592,8 @@ class DeviationAnalysis:
     @staticmethod
     def visualise_condition_deviation(results_dict, output_dir):
         """
-        Create visualisation for condition-based deviation analysis.
-        Separate subplots for each event in 2x4 arrangement with AR and VR side-by-side.
+        Create a single grouped boxplot for condition-based deviation analysis.
+        Each event is a group, with AR and VR side-by-side, using consistent color coding.
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -616,62 +617,62 @@ class DeviationAnalysis:
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Create 2x4 subplot grid
-        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-        axes = axes.flatten()
+        # Create grouped boxplots (single axes)
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-        # Get unique events (sorted)
-        events = sorted(df_plot['Event'].unique())
-
-        # Define colours for conditions
+        # Use the same color code as event-based deviation
         condition_colours = {'AR': '#2ECC71', 'VR': '#E74C3C'}
+        conditions_order = [c for c in ['AR', 'VR'] if c in df_plot['Condition'].unique()]
+        events_order = list(df_plot['Event'].unique())
 
-        for idx, event in enumerate(events):
-            ax = axes[idx]
-            
-            # Filter data for this event
-            event_data = df_plot[df_plot['Event'] == event]
-            
-            # Prepare data for side-by-side boxes
-            data_to_plot = []
-            labels = []
-            colours = []
-            
-            for condition in ['AR', 'VR']:
-                cond_data = event_data[event_data['Condition'] == condition]
-                if len(cond_data) > 0:
-                    data_to_plot.append(cond_data['Percentage_Error'].values)
-                    labels.append(condition)
-                    colours.append(condition_colours[condition])
-            
-            if data_to_plot:
-                # Create box plot
-                bp = ax.boxplot(
-                    data_to_plot,
-                    widths=0.6,
-                    patch_artist=True,
-                    showfliers=False,
-                    medianprops=dict(color="black", linewidth=1.5),
-                    whiskerprops=dict(color="black", linewidth=1.2),
-                    capprops=dict(color="black", linewidth=1.2),
-                    boxprops=dict(linewidth=1.2)
-                )
-                
-                # Colour the boxes
-                for patch, colour in zip(bp['boxes'], colours):
-                    patch.set_facecolor(colour)
-                    patch.set_edgecolor('black')
-                
-                # Set labels and formatting
-                ax.set_xticks(range(1, len(labels) + 1))
-                ax.set_xticklabels(labels, fontsize=10)
-                ax.set_ylabel('Reconstruction Error (%)', fontsize=10)
-                ax.set_title(event, fontsize=11, fontweight='bold')
-                ax.grid(axis='y', alpha=0.3)
+        # Build data arrays in event-condition order
+        data = []
+        positions = []
+        box_colors = []
+        width = 0.22
+        gap = 0.15
 
-        # Hide any unused subplots (if less than 8 events)
-        for idx in range(len(events), 8):
-            axes[idx].axis('off')
+        for e_idx, event_name in enumerate(events_order):
+            base = e_idx * (len(conditions_order) * width + gap)
+            for c_idx, cond in enumerate(conditions_order):
+                vals = df_plot[(df_plot['Event'] == event_name) & (df_plot['Condition'] == cond)]['Percentage_Error'].values
+                if len(vals) == 0:
+                    continue
+                data.append(vals)
+                positions.append(base + c_idx * width)
+                box_colors.append(condition_colours.get(cond, '#999999'))
+
+        bp = ax.boxplot(
+            data,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            showfliers=False,
+            medianprops=dict(color="black", linewidth=1.5),
+            whiskerprops=dict(color="black", linewidth=1.2),
+            capprops=dict(color="black", linewidth=1.2),
+            boxprops=dict(linewidth=1.2)
+        )
+
+        for patch, c in zip(bp['boxes'], box_colors):
+            patch.set_facecolor(c)
+            patch.set_edgecolor('black')
+
+        # X ticks: centre under each event group
+        group_centers = [
+            e_idx * (len(conditions_order) * width + gap) + (len(conditions_order) - 1) * width / 2.0
+            for e_idx in range(len(events_order))
+        ]
+        ax.set_xticks(group_centers)
+        ax.set_xticklabels(events_order, rotation=45, ha='right')
+
+        ax.set_xlabel('Event', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
+        ax.grid(axis='y', alpha=0.3)
+
+        # Legend
+        legend_handles = [Patch(facecolor=condition_colours[c], edgecolor='black', label=c) for c in conditions_order]
+        ax.legend(handles=legend_handles, title='Condition', loc='best')
 
         plt.tight_layout()
         plot_path = os.path.join(output_dir, "condition_deviation_comparison.png")
@@ -774,7 +775,6 @@ class DeviationAnalysis:
         ax.grid(axis='y', alpha=0.3)
 
         # Legend
-        from matplotlib.patches import Patch
         legend_handles = [Patch(facecolor=condition_colours[c], edgecolor='black', label=c) for c in conditions_order]
         ax.legend(handles=legend_handles, title='Condition', loc='best')
 
