@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from gias3.learning.PCA import loadPrincipalComponents
 from scipy.optimize import leastsq
 import json
@@ -54,20 +53,6 @@ class DeviationAnalysis:
     def load_test_data(out_root, datatype, event, condition, participants, top_features, minimal_imu_set=True):
         """
         Load test data for specified participants, event, and condition.
-
-        Args:
-            out_root: Root directory containing feature data
-            datatype: Data type (e.g., "IMU")
-            event: Event name
-            condition: Condition (e.g., "Normal", "AR", "VR")
-            participants: List of participant IDs
-            top_features: List of feature names to load
-            minimal_imu_set: Whether to use minimal IMU set (Head_imu, RightForeArm_imu)
-
-        Returns:
-            X: Feature data
-            y: Labels
-            groups: Participant IDs for each sample
         """
         event_dir = event.replace(" ", "_")
         event_path = os.path.join(out_root, datatype, event_dir)
@@ -142,11 +127,8 @@ class DeviationAnalysis:
         y = np.array(all_labels)
         groups = np.array(all_groups)
 
-        # Handle NaN values
-        nan_count = X.isna().sum().sum()
-        if nan_count > 0:
-            X = X.fillna(0)
-            print(f"Filled {nan_count} NaN values with zeros")
+        # Trained PCA feature space (same order)
+        X = X.reindex(columns=top_features).fillna(0)
 
         print(f"Loaded {len(X)} samples for {event} - {condition}")
         print(f"Participants: {np.unique(groups)}")
@@ -169,8 +151,11 @@ class DeviationAnalysis:
         )
         if not os.path.exists(means_path) or not os.path.exists(stds_path):
             raise FileNotFoundError(f"Feature means or stds not found for {event} {condition}")
-        means = pd.read_csv(means_path, index_col=0, squeeze=True)
-        stds = pd.read_csv(stds_path, index_col=0, squeeze=True)
+        means_df = pd.read_csv(means_path, index_col=0)
+        stds_df = pd.read_csv(stds_path, index_col=0)
+
+        means = means_df.iloc[:, 0]
+        stds = stds_df.iloc[:, 0]
         return means, stds
 
     @staticmethod
@@ -178,9 +163,17 @@ class DeviationAnalysis:
         """
         Standardise X using provided means and stds (z-score).
         """
-        stds = stds.copy()
-        stds[stds == 0] = 1.0
-        return (X - means) / stds
+        # Align stats to the current feature order to avoid silent misalignment
+        means_aligned = means.reindex(X.columns)
+        stds_aligned = stds.reindex(X.columns)
+
+        # Any missing stats (e.g., because a feature was absent) get safe defaults
+        means_aligned = means_aligned.fillna(0.0)
+        stds_aligned = stds_aligned.fillna(1.0)
+        stds_aligned = stds_aligned.copy()
+        stds_aligned[stds_aligned == 0] = 1.0
+
+        return (X - means_aligned) / stds_aligned
 
     @staticmethod
     def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
@@ -247,7 +240,10 @@ class DeviationAnalysis:
         
         # Compute reconstruction errors
         reconstruction_errors = np.sqrt(((X_test - X_reconstructed) ** 2).sum(axis=1))
-        original_magnitudes = np.sqrt((X_test ** 2).sum(axis=1))
+        
+        # Percentage error in the same standardised feature space
+        eps = 1e-12
+        original_magnitudes = np.sqrt((X_test ** 2).sum(axis=1)) + eps
         percentage_errors = (reconstruction_errors / original_magnitudes) * 100
         
         if verbose:
@@ -267,14 +263,15 @@ class DeviationAnalysis:
         """
         max_available = pc.modes.shape[1]  # How many PCs exist in the trained model
         n_modes_to_use = min(n_participants - 1, max_available)
-        modes = list(range(n_modes_to_use))
+        modes = np.arange(n_modes_to_use, dtype=int)
         
         print(f"    Fitting {len(X_test)} samples to PCA model using optimization...")
         print(f"    Using {n_modes_to_use}/{max_available} PCA modes (n_participants - 1)")
 
+        X_np = X_test.to_numpy() if hasattr(X_test, "to_numpy") else np.asarray(X_test)
         test_scores, X_reconstructed, reconstruction_errors, percentage_errors = \
             DeviationAnalysis.fit_to_pca_model(
-                X_test.values, pc, modes, m_weight=1.0, verbose=True
+                X_np, pc, modes, m_weight=1.0, verbose=True
             )
 
         return reconstruction_errors, percentage_errors, X_reconstructed, test_scores
@@ -723,18 +720,63 @@ class DeviationAnalysis:
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Create box plot with conditions side-by-side
+        # Create grouped boxplots
         fig, ax = plt.subplots(figsize=(14, 6))
 
         # Define colours for conditions
         condition_colours = {'Normal': '#3182BD', 'AR': '#2ECC71', 'VR': '#E74C3C'}
+        conditions_order = [c for c in ['Normal', 'AR', 'VR'] if c in df_plot['Condition'].unique()]
+        events_order = list(df_plot['Event'].unique())
 
-        sns.boxplot(data=df_plot, x='Event', y='Percentage_Error', hue='Condition',
-                    palette=condition_colours, ax=ax, showfliers=False)
+        # Build data arrays in event-condition order
+        data = []
+        positions = []
+        box_colors = []
+        width = 0.22
+        gap = 0.15
+
+        for e_idx, event_name in enumerate(events_order):
+            base = e_idx * (len(conditions_order) * width + gap)
+            for c_idx, cond in enumerate(conditions_order):
+                vals = df_plot[(df_plot['Event'] == event_name) & (df_plot['Condition'] == cond)]['Percentage_Error'].values
+                if len(vals) == 0:
+                    continue
+                data.append(vals)
+                positions.append(base + c_idx * width)
+                box_colors.append(condition_colours.get(cond, '#999999'))
+
+        bp = ax.boxplot(
+            data,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            showfliers=False,
+            medianprops=dict(color="black", linewidth=1.5),
+            whiskerprops=dict(color="black", linewidth=1.2),
+            capprops=dict(color="black", linewidth=1.2),
+            boxprops=dict(linewidth=1.2)
+        )
+
+        for patch, c in zip(bp['boxes'], box_colors):
+            patch.set_facecolor(c)
+            patch.set_edgecolor('black')
+
+        # X ticks: centre under each event group
+        group_centers = [
+            e_idx * (len(conditions_order) * width + gap) + (len(conditions_order) - 1) * width / 2.0
+            for e_idx in range(len(events_order))
+        ]
+        ax.set_xticks(group_centers)
+        ax.set_xticklabels(events_order, rotation=45, ha='right')
+
         ax.set_xlabel('Event Projection', fontsize=12, fontweight='bold')
         ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)
+
+        # Legend
+        from matplotlib.patches import Patch
+        legend_handles = [Patch(facecolor=condition_colours[c], edgecolor='black', label=c) for c in conditions_order]
+        ax.legend(handles=legend_handles, title='Condition', loc='best')
 
         plt.tight_layout()
 
