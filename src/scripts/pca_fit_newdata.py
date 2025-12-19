@@ -789,10 +789,10 @@ class DeviationAnalysis:
 
 if __name__ == "__main__":
     # Configuration
-    out_root = "/hpc/vlee669/Results/30 Participants/features"
-    results_dir = "/hpc/vlee669/Results/30 Participants/models"
-    minimal_results_dir = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"
-    output_dir = "/hpc/vlee669/Results/30 Participants/deviation_analysis"
+    out_root = "Z:/Upper Body/Results/30 Participants/features"
+    results_dir = "Z:/Upper Body/vlee669/Results/30 Participants/models"
+    minimal_results_dir = "Z:/Upper Body/vlee669/Results/30 Participants/minimal_imu_models"
+    output_dir = "Z:/Upper Body/vlee669/Results/30 Participants/deviation_analysis"
 
     datatype = "IMU"
     minimal_imu_set = True  # Use only Head_imu and RightForeArm_imu
