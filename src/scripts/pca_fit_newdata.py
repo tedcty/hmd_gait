@@ -656,7 +656,7 @@ class DeviationAnalysis:
         df_plot = pd.DataFrame(plot_data)
 
         # Create grouped boxplots (single axes)
-        fig, ax = plt.subplots(figsize=(14, 6))
+        fig, ax = plt.subplots(figsize=(14, 8))
 
         # Use the same color code as event-based deviation
         condition_colours = {'AR': '#2ECC71', 'VR': '#E74C3C'}
@@ -760,7 +760,7 @@ class DeviationAnalysis:
         df_plot = pd.DataFrame(plot_data)
 
         # Create grouped boxplots
-        fig, ax = plt.subplots(figsize=(14, 6))
+        fig, ax = plt.subplots(figsize=(14, 8))
 
         # Define colours for conditions
         condition_colours = {'Normal': '#3182BD', 'AR': '#2ECC71', 'VR': '#E74C3C'}
