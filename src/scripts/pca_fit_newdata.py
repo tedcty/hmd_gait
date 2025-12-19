@@ -7,6 +7,7 @@ from scipy.optimize import leastsq
 import json
 from pathlib import Path
 from matplotlib.patches import Patch
+import argparse
 
 
 class DeviationAnalysis:
@@ -590,6 +591,43 @@ class DeviationAnalysis:
         return summary_df
 
     @staticmethod
+    def save_per_participant_errors(results_dict, output_dir, analysis_type):
+        """
+        Save per-participant mean percentage errors for each event/condition.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        rows = []
+        for event_key, event_val in results_dict.items():
+            # event_val is dict of conditions or a single dict
+            if isinstance(event_val, dict) and 'participants' in event_val:
+                # Single result (shouldn't happen for your current analyses)
+                df = pd.DataFrame({
+                    'Participant': event_val['participants'],
+                    'Percentage_Error': event_val['percentage_errors'],
+                    'Event': event_key,
+                    'Condition': 'Normal'
+                })
+                per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Percentage_Error'].mean().reset_index()
+                rows.append(per_participant)
+            else:
+                for cond_key, cond_val in event_val.items():
+                    df = pd.DataFrame({
+                        'Participant': cond_val['participants'],
+                        'Percentage_Error': cond_val['percentage_errors'],
+                        'Event': event_key,
+                        'Condition': cond_key
+                    })
+                    per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Percentage_Error'].mean().reset_index()
+                    rows.append(per_participant)
+        if rows:
+            all_df = pd.concat(rows, ignore_index=True)
+            out_path = os.path.join(output_dir, f"{analysis_type}_per_participant_errors.csv")
+            all_df.to_csv(out_path, index=False)
+            print(f"Saved per-participant errors to: {out_path}")
+        else:
+            print("No per-participant errors to save.")
+
+    @staticmethod
     def visualise_condition_deviation(results_dict, output_dir):
         """
         Create a single grouped boxplot for condition-based deviation analysis.
@@ -810,7 +848,6 @@ if __name__ == "__main__":
     ]
 
     # Define test participants (hold-out set for testing)
-    # Using all 30 participants
     test_participants = [
         "P001", "P003", "P004", "P005", "P006", 
         "P007", "P008", "P010", "P011", "P012",
@@ -820,108 +857,120 @@ if __name__ == "__main__":
         "P031", "P032", "P033", "P035", "P043"
     ]
 
+    parser = argparse.ArgumentParser(description="PCA Deviation Analysis")
+    parser.add_argument('--condition', action='store_true', help='Run condition-based deviation analysis')
+    parser.add_argument('--normative', action='store_true', help='Run deviation from normative gait analysis')
+    parser.add_argument('--related', action='store_true', help='Run deviation between related events analysis')
+    args = parser.parse_args()
+
     print("="*80)
     print("PCA DEVIATION ANALYSIS")
     print("Using Minimal IMU Set: Head_imu and RightForeArm_imu")
     print(f"Test participants: {test_participants}")
     print("="*80)
 
-    # 1. CONDITION-BASED DEVIATION ANALYSIS
-    print("\n\n")
-    condition_results = DeviationAnalysis.condition_based_deviation_analysis(
-        out_root=out_root,
-        results_dir=results_dir,
-        events=all_events,
-        test_conditions=["AR", "VR"],
-        test_participants=test_participants,
-        minimal_results_dir=minimal_results_dir,
-        datatype=datatype,
-        minimal_imu_set=minimal_imu_set
-    )
+    if args.condition:
+        print("\n\n")
+        condition_results = DeviationAnalysis.condition_based_deviation_analysis(
+            out_root=out_root,
+            results_dir=results_dir,
+            events=all_events,
+            test_conditions=["AR", "VR"],
+            test_participants=test_participants,
+            minimal_results_dir=minimal_results_dir,
+            datatype=datatype,
+            minimal_imu_set=minimal_imu_set
+        )
 
-    # Save condition-based results
-    condition_output_dir = os.path.join(output_dir, "condition_based")
-    condition_summary = DeviationAnalysis.save_deviation_results(
-        condition_results, condition_output_dir, "condition_based"
-    )
+        # Save condition-based results
+        condition_output_dir = os.path.join(output_dir, "condition_based")
+        condition_summary = DeviationAnalysis.save_deviation_results(
+            condition_results, condition_output_dir, "condition_based"
+        )
 
-    # Visualise condition-based results
-    DeviationAnalysis.visualise_condition_deviation(
-        condition_results, condition_output_dir
-    )
+        # Save per-participant errors (for later combined boxplot)
+        DeviationAnalysis.save_per_participant_errors(
+            condition_results, condition_output_dir, "condition_based"
+        )
 
-    # 2. EVENT-BASED DEVIATION ANALYSIS
-    print("\n\n")
+        # Do NOT visualise condition-based results here
+        # DeviationAnalysis.visualise_condition_deviation(
+        #     condition_results, condition_output_dir
+        # )
 
-    # a. Deviation from Normative Gait (other events data to Straight walk model)
-    # Exclude Straight walk itself to only measure deviation of OTHER events
-    events_to_test = [e for e in all_events if e != "Straight walk"]
+    if args.normative:
+        print("\n\n")
+        events_to_test = [e for e in all_events if e != "Straight walk"]
 
-    normative_results = DeviationAnalysis.deviation_from_normative_gait(
-        out_root=out_root,
-        results_dir=results_dir,
-        all_events=events_to_test,
-        conditions=["Normal", "AR", "VR"],  # All three conditions
-        test_participants=test_participants,
-        minimal_results_dir=minimal_results_dir,
-        datatype=datatype,
-        minimal_imu_set=minimal_imu_set
-    )
+        normative_results = DeviationAnalysis.deviation_from_normative_gait(
+            out_root=out_root,
+            results_dir=results_dir,
+            all_events=events_to_test,
+            conditions=["Normal", "AR", "VR"],
+            test_participants=test_participants,
+            minimal_results_dir=minimal_results_dir,
+            datatype=datatype,
+            minimal_imu_set=minimal_imu_set
+        )
 
-    # Save normative gait results
-    normative_output_dir = os.path.join(output_dir, "normative_gait")
-    normative_summary = DeviationAnalysis.save_deviation_results(
-        normative_results, normative_output_dir, "normative_gait"
-    )
+        normative_output_dir = os.path.join(output_dir, "normative_gait")
+        normative_summary = DeviationAnalysis.save_deviation_results(
+            normative_results, normative_output_dir, "normative_gait"
+        )
 
-    # Visualise normative gait results
-    DeviationAnalysis.visualise_event_deviation(
-        normative_results, normative_output_dir,
-        "Deviation from Normative Gait (Straight Walk)"
-    )
+        # Save per-participant errors
+        DeviationAnalysis.save_per_participant_errors(
+            normative_results, normative_output_dir, "normative_gait"
+        )
 
-    # b. Biomechanically Related Event Pairs
-    print("\n\n")
+        # Visualise normative gait results
+        DeviationAnalysis.visualise_event_deviation(
+            normative_results, normative_output_dir,
+            "Deviation from Normative Gait (Straight Walk)"
+        )
 
-    event_pairs = [
-        ("Pick up basketball", "Put down basketball"),
-        ("Put down basketball", "Pick up basketball"),
-        ("Stair down", "Stair up"),
-        ("Stair up", "Stair down")
-    ]
+    if args.related:
+        print("\n\n")
+        event_pairs = [
+            ("Pick up basketball", "Put down basketball"),
+            ("Put down basketball", "Pick up basketball"),
+            ("Stair down", "Stair up"),
+            ("Stair up", "Stair down")
+        ]
 
-    related_events_results = DeviationAnalysis.event_based_deviation_analysis(
-        out_root=out_root,
-        results_dir=results_dir,
-        event_pairs=event_pairs,
-        conditions=["Normal", "AR", "VR"],  # All three conditions
-        test_participants=test_participants,
-        minimal_results_dir=minimal_results_dir,
-        datatype=datatype,
-        minimal_imu_set=minimal_imu_set
-    )
+        related_events_results = DeviationAnalysis.event_based_deviation_analysis(
+            out_root=out_root,
+            results_dir=results_dir,
+            event_pairs=event_pairs,
+            conditions=["Normal", "AR", "VR"],
+            test_participants=test_participants,
+            minimal_results_dir=minimal_results_dir,
+            datatype=datatype,
+            minimal_imu_set=minimal_imu_set
+        )
 
-    # Save related events results
-    related_output_dir = os.path.join(output_dir, "related_events")
-    related_summary = DeviationAnalysis.save_deviation_results(
-        related_events_results, related_output_dir, "related_events"
-    )
+        related_output_dir = os.path.join(output_dir, "related_events")
+        related_summary = DeviationAnalysis.save_deviation_results(
+            related_events_results, related_output_dir, "related_events"
+        )
 
-    # Visualise related events results
-    DeviationAnalysis.visualise_event_deviation(
-        related_events_results, related_output_dir,
-        "Deviation Between Biomechanically Related Events"
-    )
+        # Save per-participant errors
+        DeviationAnalysis.save_per_participant_errors(
+            related_events_results, related_output_dir, "related_events"
+        )
 
-    # 3. COMBINED SUMMARY
+        # Visualise related events results
+        DeviationAnalysis.visualise_event_deviation(
+            related_events_results, related_output_dir,
+            "Deviation Between Biomechanically Related Events"
+        )
+
+    if not (args.condition or args.normative or args.related):
+        print("No analysis selected. Use --condition, --normative, or --related to run a specific analysis.")
+
     print("\n\n")
     print("="*80)
     print("DEVIATION ANALYSIS COMPLETE")
     print("="*80)
     print(f"\nResults saved to: {output_dir}")
-    print("\nSummary:")
-    print(f"  - Condition-based analysis: {len(condition_results)} events")
-    print(f"  - Normative gait analysis: {len(normative_results)} events")
-    print(f"  - Related events analysis: {len(related_events_results)} event pairs")
-
     print("\nAnalysis complete!")
