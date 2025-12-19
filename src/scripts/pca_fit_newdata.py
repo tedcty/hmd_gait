@@ -664,15 +664,15 @@ class DeviationAnalysis:
             for e_idx in range(len(events_order))
         ]
         ax.set_xticks(group_centers)
-        ax.set_xticklabels(events_order, rotation=45, ha='right')
+        ax.set_xticklabels(events_order, rotation=45, ha='right', fontsize=16)
 
-        ax.set_xlabel('Event', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Event', fontsize=18, fontweight='bold')
+        ax.set_ylabel('Reconstruction Error (%)', fontsize=18, fontweight='bold')
         ax.grid(axis='y', alpha=0.3)
 
         # Legend
         legend_handles = [Patch(facecolor=condition_colours[c], edgecolor='black', label=c) for c in conditions_order]
-        ax.legend(handles=legend_handles, title='Condition', loc='best')
+        ax.legend(handles=legend_handles, title='Condition', loc='best', fontsize=16, title_fontsize=16)
 
         plt.tight_layout()
         plot_path = os.path.join(output_dir, "condition_deviation_comparison.png")
@@ -768,15 +768,15 @@ class DeviationAnalysis:
             for e_idx in range(len(events_order))
         ]
         ax.set_xticks(group_centers)
-        ax.set_xticklabels(events_order, rotation=45, ha='right')
+        ax.set_xticklabels(events_order, rotation=45, ha='right', fontsize=16)
 
-        ax.set_xlabel('Event Projection', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Reconstruction Error (%)', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Event Projection', fontsize=18, fontweight='bold')
+        ax.set_ylabel('Reconstruction Error (%)', fontsize=18, fontweight='bold')
         ax.grid(axis='y', alpha=0.3)
 
         # Legend
         legend_handles = [Patch(facecolor=condition_colours[c], edgecolor='black', label=c) for c in conditions_order]
-        ax.legend(handles=legend_handles, title='Condition', loc='best')
+        ax.legend(handles=legend_handles, title='Condition', loc='best', fontsize=16, title_fontsize=16)
 
         plt.tight_layout()
 
