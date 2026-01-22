@@ -861,6 +861,8 @@ if __name__ == "__main__":
     parser.add_argument('--condition', action='store_true', help='Run condition-based deviation analysis')
     parser.add_argument('--normative', action='store_true', help='Run deviation from normative gait analysis')
     parser.add_argument('--related', action='store_true', help='Run deviation between related events analysis')
+    parser.add_argument('--self_fit', action='store_true', help='Fit Normal data on Normal PCA models')
+
     args = parser.parse_args()
 
     print("="*80)
@@ -965,7 +967,34 @@ if __name__ == "__main__":
             "Deviation Between Biomechanically Related Events"
         )
 
-    if not (args.condition or args.normative or args.related):
+    if args.self_fit:
+        print("\n\n")
+        self_fit_results = DeviationAnalysis.condition_based_deviation_analysis(
+            out_root=out_root,
+            results_dir=results_dir,
+            events=all_events,
+            test_conditions=["Normal"],
+            test_participants=test_participants,
+            minimal_results_dir=minimal_results_dir,
+            datatype=datatype,
+            minimal_imu_set=minimal_imu_set
+        )
+
+        self_fit_output_dir = os.path.join(output_dir, "self_fit_normal")
+        self_fit_summary = DeviationAnalysis.save_deviation_results(
+            self_fit_results, self_fit_output_dir, "self_fit_normal"
+        )
+
+        self_fit_per_participant_errors = DeviationAnalysis.save_per_participant_errors(
+            self_fit_results, self_fit_output_dir, "self_fit_normal"
+        )
+
+        # Visualise
+        DeviationAnalysis.visualise_condition_deviation(
+            self_fit_results, self_fit_output_dir
+        )
+
+    if not (args.condition or args.normative or args.related or args.self_fit):
         print("No analysis selected. Use --condition, --normative, or --related to run a specific analysis.")
 
     print("\n\n")
