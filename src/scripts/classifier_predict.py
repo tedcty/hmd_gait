@@ -6,6 +6,7 @@ import seaborn as sns
 import pickle
 import json
 from sklearn.metrics import confusion_matrix
+import joblib
 
 
 class ClassifierDeviationAnalysis:
@@ -45,9 +46,7 @@ class ClassifierDeviationAnalysis:
             raise FileNotFoundError(f"Classifier model not found: {model_file}")
         
         print(f"Loading classifier: {model_file}")
-        with open(model_file, 'rb') as f:
-            model = pickle.load(f)
-        
+        model = joblib.load(model_file)
         return model
 
     @staticmethod
