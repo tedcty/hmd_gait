@@ -419,133 +419,90 @@ class ClassifierDeviationAnalysis:
     @staticmethod
     def visualise_normative_gait_specificity(results_dict, output_dir, title):
         """
-        Create horizontal bar chart for normative gait specificity.
-        Dynamically adjusts xlim based on data range.
+        Create visualisation for normative gait specificity (all events vs Straight walk).
+        Shows per-participant specificity distributions with conditions side-by-side.
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        # Prepare summary data
+        # Prepare data for plotting
         plot_data = []
         for event, conditions in results_dict.items():
             for condition, result in conditions.items():
-                plot_data.append({
-                    'Event': event,
-                    'Condition': condition,
-                    'Mean_Specificity': result['mean_participant_specificity'] * 100,
-                    'Std_Specificity': result['std_participant_specificity'] * 100
-                })
+                for spec in result['participant_specificities']:
+                    plot_data.append({
+                        'Event': event,
+                        'Condition': condition,
+                        'Specificity': spec * 100  # Convert to percentage
+                    })
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Calculate dynamic xlim based on data range
-        min_val = (df_plot['Mean_Specificity'] - df_plot['Std_Specificity']).min()
-        xlim_min = max(0, min_val - 5)  # 5% buffer below minimum, but not below 0
-        xlim_min = int(xlim_min / 10) * 10  # Round down to nearest 10
+        # Create box plot with conditions side-by-side
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-        # Create horizontal bar chart
-        fig, ax = plt.subplots(figsize=(10, 8))
-
+        # Define colours for conditions (matching PCA plots)
         condition_colours = {'Normal': '#3182BD', 'AR': '#2ECC71', 'VR': '#E74C3C'}
-        
-        events = df_plot['Event'].unique()
-        conditions = ['Normal', 'AR', 'VR']
-        y = np.arange(len(events))
-        height = 0.25
-        
-        for i, condition in enumerate(conditions):
-            condition_data = df_plot[df_plot['Condition'] == condition]
-            means = [condition_data[condition_data['Event'] == event]['Mean_Specificity'].values[0] 
-                     if len(condition_data[condition_data['Event'] == event]) > 0 else 0 
-                     for event in events]
-            stds = [condition_data[condition_data['Event'] == event]['Std_Specificity'].values[0] 
-                    if len(condition_data[condition_data['Event'] == event]) > 0 else 0 
-                    for event in events]
-            
-            ax.barh(y + i*height, means, height, xerr=stds, 
-                    label=condition, color=condition_colours[condition], 
-                    alpha=0.8, capsize=3)
-        
-        ax.set_yticks(y + height)
-        ax.set_yticklabels(events, fontsize=10)
-        ax.set_xlabel('Specificity (%)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Event', fontsize=12, fontweight='bold')
-        ax.set_xlim([xlim_min, 101])  # Dynamic lower bound
-        ax.legend(title='Condition', loc='lower right')
-        ax.grid(axis='x', alpha=0.3)
-        
+
+        sns.boxplot(data=df_plot, x='Event', y='Specificity', hue='Condition',
+                    palette=condition_colours, ax=ax, showfliers=False)
+
+        ax.set_xlabel('Event (tested against Straight walk classifier)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Specificity (%)', fontsize=12, fontweight='bold')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+        ax.set_ylim([0, 105])
+        ax.grid(axis='y', alpha=0.3)
+
         plt.tight_layout()
-        
+
         filename = title.replace(' ', '_').replace(':', '').lower()
-        plot_path = os.path.join(output_dir, f"{filename}_bar.png")
+        plot_path = os.path.join(output_dir, f"{filename}.png")
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"Saved normative gait bar chart (xlim: {xlim_min}-101): {plot_path}")
+        print(f"Saved normative gait specificity plot: {plot_path}")
 
     @staticmethod
     def visualise_classifier_specificity(results_dict, output_dir, title):
         """
-        Create horizontal bar chart for classifier specificity on related events.
-        Dynamically adjusts xlim based on data range.
+        Create visualisation for classifier-based specificity analysis.
+        Shows per-participant specificity distributions with conditions side-by-side.
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        # Prepare summary data
+        # Prepare data for plotting
         plot_data = []
         for pair_key, conditions in results_dict.items():
             for condition, result in conditions.items():
-                plot_data.append({
-                    'Event_Pair': pair_key,
-                    'Condition': condition,
-                    'Mean_Specificity': result['mean_participant_specificity'] * 100,
-                    'Std_Specificity': result['std_participant_specificity'] * 100
-                })
+                for spec in result['participant_specificities']:
+                    plot_data.append({
+                        'Event_Pair': pair_key,
+                        'Condition': condition,
+                        'Specificity': spec * 100  # Convert to percentage
+                    })
 
         df_plot = pd.DataFrame(plot_data)
 
-        # Calculate dynamic xlim based on data range
-        min_val = (df_plot['Mean_Specificity'] - df_plot['Std_Specificity']).min()
-        xlim_min = max(0, min_val - 5)  # 5% buffer below minimum, but not below 0
-        xlim_min = int(xlim_min / 10) * 10  # Round down to nearest 10
+        # Create box plot with conditions side-by-side
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-        # Create horizontal bar chart
-        fig, ax = plt.subplots(figsize=(10, 6))
-
+        # Define colours for conditions (matching PCA plots)
         condition_colours = {'Normal': '#3182BD', 'AR': '#2ECC71', 'VR': '#E74C3C'}
-        
-        pairs = df_plot['Event_Pair'].unique()
-        conditions = ['Normal', 'AR', 'VR']
-        y = np.arange(len(pairs))
-        height = 0.25
-        
-        for i, condition in enumerate(conditions):
-            condition_data = df_plot[df_plot['Condition'] == condition]
-            means = [condition_data[condition_data['Event_Pair'] == pair]['Mean_Specificity'].values[0] 
-                     if len(condition_data[condition_data['Event_Pair'] == pair]) > 0 else 0 
-                     for pair in pairs]
-            stds = [condition_data[condition_data['Event_Pair'] == pair]['Std_Specificity'].values[0] 
-                    if len(condition_data[condition_data['Event_Pair'] == pair]) > 0 else 0 
-                    for pair in pairs]
-            
-            ax.barh(y + i*height, means, height, xerr=stds, 
-                    label=condition, color=condition_colours[condition], 
-                    alpha=0.8, capsize=3)
-        
-        ax.set_yticks(y + height)
-        ax.set_yticklabels(pairs, fontsize=10)
-        ax.set_xlabel('Specificity (%)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Event Pair (Source→Target)', fontsize=12, fontweight='bold')
-        ax.set_xlim([xlim_min, 101])  # Dynamic lower bound
-        ax.legend(title='Condition', loc='lower right')
-        ax.grid(axis='x', alpha=0.3)
-        
+
+        sns.boxplot(data=df_plot, x='Event_Pair', y='Specificity', hue='Condition',
+                    palette=condition_colours, ax=ax, showfliers=False)
+
+        ax.set_xlabel('Event Pair (Source→Target Classifier)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Specificity (%)', fontsize=12, fontweight='bold')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+        ax.set_ylim([0, 105])
+        ax.grid(axis='y', alpha=0.3)
+
         plt.tight_layout()
-        
+
         filename = title.replace(' ', '_').replace(':', '').lower()
-        plot_path = os.path.join(output_dir, f"{filename}_bar.png")
+        plot_path = os.path.join(output_dir, f"{filename}.png")
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"Saved classifier specificity bar chart (xlim: {xlim_min}-101): {plot_path}")
-
+        print(f"Saved classifier specificity plot: {plot_path}")
 
 if __name__ == "__main__":
     # Configuration
