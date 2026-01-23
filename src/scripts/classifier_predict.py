@@ -449,7 +449,7 @@ class ClassifierDeviationAnalysis:
         ax.set_xlabel('Event (tested against Straight walk classifier)', fontsize=12, fontweight='bold')
         ax.set_ylabel('Specificity (%)', fontsize=12, fontweight='bold')
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-        ax.set_ylim([0, 105])
+        ax.set_ylim([50, 105])
         ax.grid(axis='y', alpha=0.3)
 
         plt.tight_layout()
@@ -493,7 +493,7 @@ class ClassifierDeviationAnalysis:
         ax.set_xlabel('Event Pair (Source→Target Classifier)', fontsize=12, fontweight='bold')
         ax.set_ylabel('Specificity (%)', fontsize=12, fontweight='bold')
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-        ax.set_ylim([0, 105])
+        ax.set_ylim([50, 105])
         ax.grid(axis='y', alpha=0.3)
 
         plt.tight_layout()
