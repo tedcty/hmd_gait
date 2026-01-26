@@ -428,7 +428,7 @@ class NormativePCAModel:
                     print(f"Warning: No training data for fold {fold_idx}")
                     continue
 
-                # === STANDARDISE FEATURES (Z-SCORE) ===
+                # STANDARDISE FEATURES (Z-SCORE)
                 feature_means = X_train.mean(axis=0)
                 feature_stds = X_train.std(axis=0)
                 feature_stds[feature_stds == 0] = 1.0  # Prevent division by zero
@@ -494,7 +494,7 @@ class NormativePCAModel:
                             X_test = X_test.reindex(columns=feature_names)
                             # Fill any missing columns with zeros
                             X_test = X_test.fillna(0)
-                            # === STANDARDISE TEST DATA USING TRAINING STATISTICS ===
+                            # STANDARDISE TEST DATA USING TRAINING STATISTICS
                             X_test_standardised = (X_test - feature_means) / feature_stds
                             # Use optimization-based fitting instead of direct projection
                             print(f"Fitting test data to PCA model using optimization...")
@@ -503,7 +503,7 @@ class NormativePCAModel:
                                 X_test_standardised.values, pc, modes, m_weight=1.0, verbose=True
                             )
 
-                            # === CALCULATE RECONSTRUCTION ERROR IN STANDARDISED SPACE ===
+                            # CALCULATE RECONSTRUCTION ERROR IN STANDARDISED SPACE
                             eps = 1e-12
                             denom = np.linalg.norm(X_test_standardised.values, axis=1) + eps
                             percentage_errors = (reconstruction_errors / denom) * 100
@@ -1120,7 +1120,7 @@ if __name__ == "__main__":
             print(f"  Total samples: {len(X_all)}")
             print(f"  Total features: {len(feature_names)}")
             
-            # === STANDARDISE FEATURES (Z-SCORE) ===
+            # STANDARDISE FEATURES (Z-SCORE)
             feature_means = X_all.mean(axis=0)
             feature_stds = X_all.std(axis=0)
             feature_stds[feature_stds == 0] = 1.0  # Prevent division by zero
