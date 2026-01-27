@@ -500,7 +500,7 @@ class NormativePCAModel:
                             print(f"Fitting test data to PCA model using optimization...")
                             modes = np.arange(n_components_fold, dtype=int)
                             test_scores, X_reconstructed, reconstruction_errors = fit_to_pca_model(
-                                X_test_standardised.values, pc, modes, m_weight=1.0, verbose=True
+                                X_test_standardised.values, pc, modes, m_weight=0.0, verbose=True
                             )
 
                             # CALCULATE RECONSTRUCTION ERROR IN STANDARDISED SPACE
@@ -786,12 +786,13 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
             
             # Reconstruction error per feature
             recon_error = target - X_recon
-            
-            # Mahalanobis penalty as vector (one per mode)
-            penalty_vector = penalty_scale * weights_sd
-            
-            # Return combined residuals
-            return np.append(recon_error, penalty_vector)
+
+            # Penalty only if m_weight > 0
+            if m_weight is not None and m_weight > 0:
+                penalty_vector = penalty_scale * weights_sd  # Mahalanobis penalty as vector (one per mode)
+                return np.append(recon_error, penalty_vector)
+            else:
+                return recon_error
         
         # Initial guess: zero weights (mean shape)
         x0 = np.zeros(n_modes)
