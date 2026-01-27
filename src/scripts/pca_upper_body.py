@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from gias3.learning.PCA import PCA
 import traceback
 from multiprocessing import Pool
-from scipy.optimize import leastsq
+from scipy.optimize import least_squares
 
 
 class NormativePCAModel:
@@ -500,7 +500,7 @@ class NormativePCAModel:
                             print(f"Fitting test data to PCA model using optimization...")
                             modes = np.arange(n_components_fold, dtype=int)
                             test_scores, X_reconstructed, reconstruction_errors = fit_to_pca_model(
-                                X_test_standardised.values, pc, modes, m_weight=0.0, verbose=True
+                                X_test_standardised.values, pc, modes, m_weight=0.01, verbose=True
                             )
 
                             # CALCULATE RECONSTRUCTION ERROR IN STANDARDISED SPACE
@@ -798,7 +798,8 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
         x0 = np.zeros(n_modes)
         
         # Optimize using least squares
-        xopt = leastsq(objective, x0, xtol=1e-6, ftol=1e-6)[0]
+        res = least_squares(objective, x0, method="lm", xtol=1e-8, ftol=1e-8, gtol=1e-8, verbose=2 if verbose else 0)
+        xopt = res.x
         
         # Store optimized scores (in SD units)
         scores_opt[i, :] = xopt
