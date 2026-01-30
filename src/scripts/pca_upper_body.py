@@ -26,7 +26,7 @@ class NormativePCAModel:
         
         event_conditions = {}
         
-        for event_dir in os.listdir(base_dir):
+        for event_dir in sorted(os.listdir(base_dir)):
             event_path = os.path.join(base_dir, event_dir)
             if os.path.isdir(event_path):
                 # Convert directory name back to event name (replace _ with space)
@@ -36,12 +36,12 @@ class NormativePCAModel:
                 conditions_found = set()
                 participants = {}
                 
-                for participant_dir in os.listdir(event_path):
+                for participant_dir in sorted(os.listdir(event_path)):
                     participant_path = os.path.join(event_path, participant_dir)
                     if os.path.isdir(participant_path):
                         
                         # Look through all IMU locations for this participant
-                        for imu_location in os.listdir(participant_path):
+                        for imu_location in sorted(os.listdir(participant_path)):
                             # Filter for minimal IMU set if enabled
                             if minimal_imus is not None and imu_location not in minimal_imus:
                                 continue
@@ -201,7 +201,7 @@ class NormativePCAModel:
                 continue
             
             # Go through each IMU location for this participant
-            for imu_location in os.listdir(participant_path):
+            for imu_location in sorted(os.listdir(participant_path)):
                 # Filter for minimal IMU set if enabled
                 if minimal_imus is not None and imu_location not in minimal_imus:
                     continue
@@ -212,7 +212,7 @@ class NormativePCAModel:
                     continue
                 
                 # Look for files that contain the specific condition in the filename
-                for file in os.listdir(imu_path):
+                for file in sorted(os.listdir(imu_path)):
                     if file.endswith('_X.csv'):
                         # Check if this file contains our condition
                         if f"_{condition}_" in file:
@@ -499,8 +499,21 @@ class NormativePCAModel:
                             # Use optimization-based fitting instead of direct projection
                             print(f"Fitting test data to PCA model using optimization...")
                             modes = np.arange(n_components_fold, dtype=int)
+                            # Create feature weights based on prevalence ranking
+                            w_feat = make_prevalence_rank_weights(
+                                feature_names=feature_names,
+                                ranked_features=top_features,
+                                w_max=1.3,
+                                w_min=0.7
+                            )
+                            print("Top 5 weighted features:")
+                            for i in range(5):
+                                print(feature_names[i], w_feat[i])
+                            print("Bottom 5 weighted features:")
+                            for i in range(-5, 0):
+                                print(feature_names[i], w_feat[i])
                             test_scores, X_reconstructed, reconstruction_errors = fit_to_pca_model(
-                                X_test_standardised.values, pc, modes, m_weight=0.01, verbose=True
+                                X_test_standardised.values, pc, modes, m_weight=0.01, verbose=False, w_feat=w_feat
                             )
 
                             # CALCULATE RECONSTRUCTION ERROR IN STANDARDISED SPACE
@@ -748,7 +761,7 @@ def aggregate_reconstruction_errors(cv_dir, datatype, event_filename, condition)
     
     return combined, stats
 
-def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
+def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False, w_feat=None):
     """
     Fit test data to PCA model by optimizing PCA scores to minimize reconstruction error.
     
@@ -767,6 +780,16 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
     
     # Precompute penalty scaling
     penalty_scale = np.sqrt(m_weight)
+
+    n_features = X_test.shape[1]
+    if w_feat is None:
+        w_feat_np = np.ones(n_features, dtype=float)
+    else:
+        w_feat_np = np.asarray(w_feat, dtype=float)
+        if w_feat_np.shape[0] != n_features:
+            raise ValueError(f"w_feat length {w_feat_np.shape[0]} does not match number of features {n_features}")
+    
+    sqrt_w = np.sqrt(w_feat_np)
     
     # Optimize for each sample
     for i in range(n_samples):
@@ -786,6 +809,9 @@ def fit_to_pca_model(X_test, pc, modes, m_weight=1.0, verbose=False):
             
             # Reconstruction error per feature
             recon_error = target - X_recon
+
+            # Apply feature weights
+            recon_error = recon_error * sqrt_w
 
             # Penalty only if m_weight > 0
             if m_weight is not None and m_weight > 0:
@@ -836,9 +862,26 @@ def process_single_event(args):
         traceback.print_exc()
         return None
 
+def make_prevalence_rank_weights(feature_names, ranked_features, w_max=1.3, w_min=0.7):
+    """
+    Create per-feature weight from a ranked feature list (rank 0 = best).
+    """
+    n = len(ranked_features)
+    rank = {f: i for i, f in enumerate(ranked_features)}
+
+    w = np.ones(len(feature_names), dtype=float)
+    for j, f in enumerate(feature_names):
+        r = rank.get(f, n - 1)
+        # Linear decay from w_max to w_min
+        w[j] = w_max - (w_max - w_min) * (r / (n - 1))
+
+    # Normalise to keep average weight = 1
+    w = w / np.mean(w)
+    return w
+
 if __name__ == "__main__":
     # Toggle for minimal IMU set
-    USE_MINIMAL_IMU_SET = False  # Set to True to use only Head_imu and RightForeArm_imu
+    USE_MINIMAL_IMU_SET = True  # Set to True to use only Head_imu and RightForeArm_imu
     
     # Set up paths
     out_root = "/hpc/vlee669/Results/30 Participants/features"
