@@ -406,14 +406,6 @@ class NormativePCAModel:
             print(f"Training participants ({len(train_participants)}): {train_participants}")
             print(f"Test participants ({len(test_participants)}): {test_participants}")
             
-            # Determine number of components for this fold
-            if n_components is None:
-                n_components_fold = len(train_participants) - 1
-            else:
-                n_components_fold = min(n_components, len(train_participants) - 1)
-            
-            print(f"Number of components for this fold: {n_components_fold}")
-            
             try:
                 # Load training data (event windows only)
                 X_train, y_train, groups_train, feature_names = NormativePCAModel.load_event_condition_data(
@@ -427,6 +419,16 @@ class NormativePCAModel:
                 if len(X_train) == 0:
                     print(f"Warning: No training data for fold {fold_idx}")
                     continue
+                
+                # Determine number of components for this fold
+                max_pcs = X_train.shape[1]  # Number of features (100)
+
+                if n_components is None:
+                    n_components_fold = max_pcs  # Use all possible PCs
+                else:
+                    n_components_fold = min(n_components, max_pcs)
+                
+                print(f"Number of components for this fold: {n_components_fold}")
 
                 # STANDARDISE FEATURES (Z-SCORE)
                 feature_means = X_train.mean(axis=0)
@@ -598,6 +600,11 @@ class NormativePCAModel:
         
         components = np.arange(1, max_components + 1)
         
+        # Only plot the first N PCs for readability
+        N = 30
+        N = min(N, max_components)
+        idx = np.arange(N)
+        
         # Determine bar color based on condition
         if condition == 'Normal':
             bar_color = 'blue'
@@ -609,15 +616,15 @@ class NormativePCAModel:
             bar_color = 'gray'  # Fallback for unknown conditions
         
         # Bar plot for explained variance
-        ax.bar(components, evr_mean * 100, yerr=evr_std * 100, 
+        ax.bar(components[idx], evr_mean[idx] * 100, yerr=evr_std[idx] * 100, 
                color=bar_color, alpha=0.7, capsize=5, 
                error_kw={'elinewidth': 2, 'capthick': 2},
                label='Explained Variance')
         
         # Line plot for cumulative variance
-        ax.errorbar(components, cum_mean * 100, yerr=cum_std * 100,
-                   color='black', marker='o', markersize=8, linewidth=2.5,
-                   capsize=5, capthick=2, elinewidth=2,
+        ax.errorbar(components[idx], cum_mean[idx] * 100, yerr=cum_std[idx] * 100,
+                   color='black', marker='o', markersize=6, linewidth=2,
+                   capsize=5, capthick=1.5, elinewidth=1.5,
                    label='Cumulative Variance')
         
         ax.set_xlabel("Principal Component", fontsize=12)
@@ -626,7 +633,7 @@ class NormativePCAModel:
         ax.grid(True, alpha=0.3, axis='y')
         
         # Set x-axis to show integer component numbers
-        ax.set_xticks(components)
+        ax.set_xticks(components[idx])
         
         plt.tight_layout()
         plot_path = os.path.join(cv_dir, f"{datatype}_{event_filename}_{condition}_cv_explained_variance.png")
@@ -840,7 +847,7 @@ def process_single_event(args):
 
 if __name__ == "__main__":
     # Toggle for minimal IMU set
-    USE_MINIMAL_IMU_SET = False  # Set to True to use only Head_imu and RightForeArm_imu
+    USE_MINIMAL_IMU_SET = True  # Set to True to use only Head_imu and RightForeArm_imu
     
     # Set up paths
     out_root = "/hpc/vlee669/Results/30 Participants/features"
