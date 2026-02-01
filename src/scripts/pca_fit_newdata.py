@@ -3,9 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from gias3.learning.PCA import loadPrincipalComponents
-from scipy.optimize import leastsq
-import json
-from pathlib import Path
+from scipy.optimize import least_squares
 from matplotlib.patches import Patch
 import argparse
 
@@ -34,7 +32,7 @@ class DeviationAnalysis:
         return pc
 
     @staticmethod
-    def load_top_features(results_dir, event, condition, datatype="IMU", minimal_results_dir=None):
+    def load_top_features(results_dir, event, condition, datatype="IMU"):
         """
         Load feature order directly from trained PCA model loadings.
         This guarantees exact feature order match with the trained model.
@@ -197,7 +195,8 @@ class DeviationAnalysis:
         X_reconstructed = np.zeros_like(X_test)
         
         # Precompute penalty scaling
-        penalty_scale = np.sqrt(m_weight)
+        use_penalty = (m_weight is not None) and (m_weight > 0)
+        penalty_scale = np.sqrt(m_weight) if use_penalty else 0.0
         
         # Optimize for each sample
         for i in range(n_samples):
@@ -219,16 +218,18 @@ class DeviationAnalysis:
                 recon_error = target - X_recon
                 
                 # Mahalanobis penalty as vector (one per mode)
-                penalty_vector = penalty_scale * weights_sd
-                
-                # Return combined residuals
-                return np.append(recon_error, penalty_vector)
+                if use_penalty:
+                    penalty_vector = penalty_scale * weights_sd
+                    return np.append(recon_error, penalty_vector)
+                else:
+                    return recon_error
             
             # Initial guess: zero weights (mean shape)
             x0 = np.zeros(n_modes)
             
             # Optimize using least squares
-            xopt = leastsq(objective, x0, xtol=1e-6, ftol=1e-6)[0]
+            res = least_squares(objective, x0, method='lm', ftol=1e-8, xtol=1e-8, gtol=1e-8, verbose=2 if verbose else 0)
+            xopt = res.x
             
             # Store optimized scores (in SD units)
             scores_opt[i, :] = xopt
@@ -255,28 +256,49 @@ class DeviationAnalysis:
         return scores_opt, X_reconstructed, reconstruction_errors, percentage_errors
 
     @staticmethod
-    def compute_reconstruction_error(pc, X_test, n_participants=30):
+    def compute_reconstruction_error(pc, X_test, n_modes=None, m_weight=0.01):
         """
         Compute reconstruction error for test data using optimization-based PCA fitting.
         Uses least squares optimization to find best-fit PCA scores with Mahalanobis regularization.
 
-        n_participants controls the number of PCs used for reconstruction:
-        modes_used = n_participants - 1
+        Uses all available PCs in the trained model by default (n_modes=None).
+        Optionally you can cap to first n_modes PCs if you want.
         """
         max_available = pc.modes.shape[1]  # How many PCs exist in the trained model
-        n_modes_to_use = min(n_participants - 1, max_available)
+        n_modes_to_use = max_available if n_modes is None else min(int(n_modes), max_available)
         modes = np.arange(n_modes_to_use, dtype=int)
         
         print(f"    Fitting {len(X_test)} samples to PCA model using optimization...")
-        print(f"    Using {n_modes_to_use}/{max_available} PCA modes (n_participants - 1)")
+        print(f"    Using {n_modes_to_use}/{max_available} PCA modes")
 
         X_np = X_test.to_numpy() if hasattr(X_test, "to_numpy") else np.asarray(X_test)
         test_scores, X_reconstructed, reconstruction_errors, percentage_errors = \
             DeviationAnalysis.fit_to_pca_model(
-                X_np, pc, modes, m_weight=1.0, verbose=True
+                X_np, pc, modes, m_weight=m_weight, verbose=False
             )
 
         return reconstruction_errors, percentage_errors, X_reconstructed, test_scores
+    
+    @staticmethod
+    def per_participant_mean_errors(groups, percent_errors):
+        df = pd.DataFrame({
+            'Participant': groups,
+            'Percentage_Error': percent_errors
+        })
+        return df.groupby('Participant')['Percentage_Error'].mean()
+    
+    @staticmethod
+    def baseline_stats_from_participants(groups, percent_errors):
+        """
+        Baseline mean/std computed over per-participant mean percentage errors.
+        This avoids bias from participants with more samples.
+        """
+        pp = DeviationAnalysis.per_participant_mean_errors(groups, percent_errors)
+        mu = float(pp.mean())
+        sd = float(pp.std(ddof=1))
+        if sd == 0 or np.isnan(sd):
+            sd = 1.0 # Safe default to avoid zero std
+        return mu, sd, pp  # Return per-participant series too
 
     @staticmethod
     def condition_based_deviation_analysis(out_root, results_dir, events, test_conditions,
@@ -315,15 +337,19 @@ class DeviationAnalysis:
             # Load top features for this event
             try:
                 top_features = DeviationAnalysis.load_top_features(
-                    results_dir, event, "Normal", datatype, minimal_results_dir
+                    results_dir, event, "Normal", datatype
                 )
                 print(f"Loaded {len(top_features)} top features")
             except Exception as e:
                 print(f"Error loading top features for {event}: {e}")
                 continue
 
-            # Analyse each test condition
-            for test_condition in test_conditions:
+            # Analyse each condition
+            all_conditions = ["Normal"] + [c for c in test_conditions if c != "Normal"]
+            baseline_mu = None
+            baseline_sd = None
+
+            for test_condition in all_conditions:
                 print(f"\n  Testing condition: {test_condition}")
 
                 # Load test data
@@ -342,7 +368,21 @@ class DeviationAnalysis:
 
                 # Compute reconstruction error
                 recon_errors, percent_errors, X_recon, scores = DeviationAnalysis.compute_reconstruction_error(
-                    pc_normal, X_test)
+                    pc_normal, X_test, n_modes=None, m_weight=0.01)
+                
+                # If this is the baseline (Normal), compute baseline stats
+                if test_condition == "Normal":
+                    baseline_mu, baseline_sd, baseline_pp = DeviationAnalysis.baseline_stats_from_participants(groups_test, percent_errors)
+                    print(f"  Baseline (Normal->Normal) per-participant mean percentage error: {baseline_mu:.2f}% ± {baseline_sd:.2f}%")
+
+                # z-score each sample relative to baseline
+                if baseline_mu is not None and baseline_sd is not None:
+                    z_scores = (percent_errors - baseline_mu) / baseline_sd
+                else:
+                    z_scores = None
+
+                pp_z = DeviationAnalysis.per_participant_mean_errors(groups_test, z_scores) if z_scores is not None else None
+                pp_percent = DeviationAnalysis.per_participant_mean_errors(groups_test, percent_errors)
 
                 # Store results
                 condition_result = {
@@ -355,7 +395,15 @@ class DeviationAnalysis:
                     'mean_percent_error': percent_errors.mean(),
                     'std_percent_error': percent_errors.std(),
                     'median_percent_error': np.median(percent_errors),
-                    'pca_scores': scores
+                    'pca_scores': scores,
+                    'baseline_mean_percent_error': baseline_mu,
+                    'baseline_sd_percent_error': baseline_sd,
+                    'z_scores': z_scores,
+                    'median_z': np.median(z_scores) if z_scores is not None else None,
+                    'mean_z': float(np.mean(z_scores)) if z_scores is not None else None,
+                    'std_z': float(np.std(z_scores, ddof=1)) if z_scores is not None else None,
+                    'per_participant_mean_percent_error': pp_percent,
+                    'per_participant_mean_z': pp_z
                 }
 
                 event_results[test_condition] = condition_result
@@ -382,6 +430,7 @@ class DeviationAnalysis:
         print("="*80)
 
         results_dict = {}
+        baseline_cache = {}
 
         for source_event, target_event in event_pairs:
             print(f"\n{'='*60}")
@@ -408,12 +457,38 @@ class DeviationAnalysis:
                 # Load top features for target event (PCA was trained on these)
                 try:
                     top_features = DeviationAnalysis.load_top_features(
-                        results_dir, target_event, condition, datatype, minimal_results_dir
+                        results_dir, target_event, condition, datatype
                     )
                     print(f"  Loaded {len(top_features)} top features from {target_event}")
                 except Exception as e:
                     print(f"  Error loading top features for {target_event}: {e}")
                     continue
+
+                cache_key = (target_event, condition)
+                if cache_key in baseline_cache:
+                    base_mu, base_sd, _ = baseline_cache[cache_key]
+                else:
+                    # Baseline: target_event -> target_event model (same condition)
+                    X_base, y_base, groups_base = DeviationAnalysis.load_test_data(
+                        out_root, datatype, target_event, condition,
+                        test_participants, top_features, minimal_imu_set
+                    )
+
+                    if X_base is None or len(X_base) == 0:
+                        print(f"  No baseline data available for {target_event} - {condition}")
+                        continue
+
+                    means, stds = DeviationAnalysis.load_feature_means_stds(results_dir, target_event, condition, datatype)
+                    X_base = DeviationAnalysis.standardise_X(X_base, means, stds)
+
+                    _, base_percent_errors, _, _ = DeviationAnalysis.compute_reconstruction_error(
+                        pc_target, X_base, n_modes=None, m_weight=0.01)
+                    
+                    base_mu, base_sd, base_pp = DeviationAnalysis.baseline_stats_from_participants(groups_base, base_percent_errors)
+
+                    print(f"  Baseline ({target_event}->{target_event}) per-participant mean percentage error: {base_mu:.2f}% ± {base_sd:.2f}%")
+
+                    baseline_cache[cache_key] = (base_mu, base_sd, base_pp)
 
                 # Load source event data for this condition
                 X_test, y_test, groups_test = DeviationAnalysis.load_test_data(
@@ -431,7 +506,12 @@ class DeviationAnalysis:
 
                 # Compute reconstruction error
                 recon_errors, percent_errors, X_recon, scores = \
-                    DeviationAnalysis.compute_reconstruction_error(pc_target, X_test)
+                    DeviationAnalysis.compute_reconstruction_error(pc_target, X_test, n_modes=None, m_weight=0.01)
+                
+                z_scores = (percent_errors - base_mu) / base_sd if base_mu is not None and base_sd is not None else None
+                
+                pp_z = DeviationAnalysis.per_participant_mean_errors(groups_test, z_scores) if z_scores is not None else None
+                pp_percent = DeviationAnalysis.per_participant_mean_errors(groups_test, percent_errors)
 
                 # Store results
                 condition_result = {
@@ -444,7 +524,20 @@ class DeviationAnalysis:
                     'mean_percent_error': percent_errors.mean(),
                     'std_percent_error': percent_errors.std(),
                     'median_percent_error': np.median(percent_errors),
-                    'pca_scores': scores
+                    'pca_scores': scores,
+                    'source_event': source_event,
+                    'target_event': target_event,
+                    'condition': condition,
+                    'baseline_mean_percent_error': float(base_mu) if base_mu is not None else None,
+                    'baseline_sd_percent_error': float(base_sd) if base_sd is not None else None,
+                    'z_scores': z_scores,
+                    'mean_z': float(np.mean(z_scores)) if z_scores is not None else None,
+                    'std_z': float(np.std(z_scores, ddof=1)) if z_scores is not None else None,
+                    'median_z': np.median(z_scores) if z_scores is not None else None,
+                    'per_participant_mean_percent_error': pp_percent,
+                    'per_participant_mean_z': pp_z,
+                    'mean_pp_z': float(pp_z.mean()) if pp_z is not None else None,
+                    'median_pp_z': float(pp_z.median()) if pp_z is not None else None
                 }
 
                 pair_results[condition] = condition_result
@@ -498,12 +591,31 @@ class DeviationAnalysis:
                 # Load top features for Straight walk
                 try:
                     top_features = DeviationAnalysis.load_top_features(
-                        results_dir, normative_event, condition, datatype, minimal_results_dir
+                        results_dir, normative_event, condition, datatype
                     )
                     print(f"  Loaded {len(top_features)} top features")
                 except Exception as e:
                     print(f"  Error loading top features: {e}")
+                    
+                # Baseline: Straight walk -> Straight walk model (same condition)
+                X_base, y_base, groups_base = DeviationAnalysis.load_test_data(
+                    out_root, datatype, normative_event, condition,
+                    test_participants, top_features, minimal_imu_set
+                )
+                
+                if X_base is None or len(X_base) == 0:
+                    print(f"  No baseline data available for Straight walk - {condition}")
                     continue
+
+                means, stds = DeviationAnalysis.load_feature_means_stds(results_dir, normative_event, condition, datatype)
+                X_base = DeviationAnalysis.standardise_X(X_base, means, stds)
+
+                _, base_percent_errors, _, _ = DeviationAnalysis.compute_reconstruction_error(
+                    pc_normative, X_base, n_modes=None, m_weight=0.01)
+                
+                base_mu, base_sd, base_pp = DeviationAnalysis.baseline_stats_from_participants(groups_base, base_percent_errors)
+
+                print(f"  Baseline (Straight walk->Straight walk) per-participant mean percentage error: {base_mu:.2f}% ± {base_sd:.2f}%")
 
                 # Load event data for this condition
                 X_test, y_test, groups_test = DeviationAnalysis.load_test_data(
@@ -521,7 +633,13 @@ class DeviationAnalysis:
 
                 # Compute reconstruction error
                 recon_errors, percent_errors, X_recon, scores = \
-                    DeviationAnalysis.compute_reconstruction_error(pc_normative, X_test)
+                    DeviationAnalysis.compute_reconstruction_error(pc_normative, X_test, n_modes=None, m_weight=0.01)
+                
+                # Compute z-scores relative to baseline
+                z_scores = (percent_errors - base_mu) / base_sd
+
+                pp_z = DeviationAnalysis.per_participant_mean_errors(groups_test, z_scores) if z_scores is not None else None
+                pp_percent = DeviationAnalysis.per_participant_mean_errors(groups_test, percent_errors)
 
                 # Store results
                 condition_result = {
@@ -534,7 +652,15 @@ class DeviationAnalysis:
                     'mean_percent_error': percent_errors.mean(),
                     'std_percent_error': percent_errors.std(),
                     'median_percent_error': np.median(percent_errors),
-                    'pca_scores': scores
+                    'pca_scores': scores,
+                    'baseline_mean_percent_error': float(base_mu) if base_mu is not None else None,
+                    'baseline_sd_percent_error': float(base_sd) if base_sd is not None else None,
+                    'z_scores': z_scores,
+                    'mean_z': float(np.mean(z_scores)) if z_scores is not None else None,
+                    'std_z': float(np.std(z_scores, ddof=1)) if z_scores is not None else None,
+                    'median_z': np.median(z_scores) if z_scores is not None else None,
+                    'per_participant_mean_percent_error': pp_percent,
+                    'per_participant_mean_z': pp_z
                 }
 
                 event_results[condition] = condition_result
@@ -626,6 +752,49 @@ class DeviationAnalysis:
             print(f"Saved per-participant errors to: {out_path}")
         else:
             print("No per-participant errors to save.")
+
+@staticmethod
+def save_per_participant_zscores(results_dict, output_dir, analysis_type):
+    """
+    Save per-participant mean z-scores for each event/condition (if z_scores exist).
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    rows = []
+
+    for event_key, event_val in results_dict.items():
+        # event_val should be dict of conditions
+        if isinstance(event_val, dict) and 'participants' in event_val:
+            # single-result case
+            if event_val.get('z_scores') is None:
+                continue
+            df = pd.DataFrame({
+                'Participant': event_val['participants'],
+                'Z_Score': event_val['z_scores'],
+                'Event': event_key,
+                'Condition': 'Normal'
+            })
+            per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Z_Score'].mean().reset_index()
+            rows.append(per_participant)
+        else:
+            for cond_key, cond_val in event_val.items():
+                if cond_val.get('z_scores') is None:
+                    continue
+                df = pd.DataFrame({
+                    'Participant': cond_val['participants'],
+                    'Z_Score': cond_val['z_scores'],
+                    'Event': event_key,
+                    'Condition': cond_key
+                })
+                per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Z_Score'].mean().reset_index()
+                rows.append(per_participant)
+
+    if rows:
+        all_df = pd.concat(rows, ignore_index=True)
+        out_path = os.path.join(output_dir, f"{analysis_type}_per_participant_zscores.csv")
+        all_df.to_csv(out_path, index=False)
+        print(f"Saved per-participant z-scores to: {out_path}")
+    else:
+        print("No per-participant z-scores to save (z_scores missing or None).")
 
     @staticmethod
     def visualise_condition_deviation(results_dict, output_dir):
@@ -895,6 +1064,10 @@ if __name__ == "__main__":
             condition_results, condition_output_dir, "condition_based"
         )
 
+        DeviationAnalysis.save_per_participant_zscores(
+            condition_results, condition_output_dir, "condition_based"
+        )
+
         # Do NOT visualise condition-based results here
         # DeviationAnalysis.visualise_condition_deviation(
         #     condition_results, condition_output_dir
@@ -922,6 +1095,10 @@ if __name__ == "__main__":
 
         # Save per-participant errors
         DeviationAnalysis.save_per_participant_errors(
+            normative_results, normative_output_dir, "normative_gait"
+        )
+
+        DeviationAnalysis.save_per_participant_zscores(
             normative_results, normative_output_dir, "normative_gait"
         )
 
@@ -961,6 +1138,10 @@ if __name__ == "__main__":
             related_events_results, related_output_dir, "related_events"
         )
 
+        DeviationAnalysis.save_per_participant_zscores(
+            related_events_results, related_output_dir, "related_events"
+        )
+
         # Visualise related events results
         DeviationAnalysis.visualise_event_deviation(
             related_events_results, related_output_dir,
@@ -986,6 +1167,10 @@ if __name__ == "__main__":
         )
 
         self_fit_per_participant_errors = DeviationAnalysis.save_per_participant_errors(
+            self_fit_results, self_fit_output_dir, "self_fit_normal"
+        )
+
+        DeviationAnalysis.save_per_participant_zscores(
             self_fit_results, self_fit_output_dir, "self_fit_normal"
         )
 
