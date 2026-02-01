@@ -753,48 +753,48 @@ class DeviationAnalysis:
         else:
             print("No per-participant errors to save.")
 
-@staticmethod
-def save_per_participant_zscores(results_dict, output_dir, analysis_type):
-    """
-    Save per-participant mean z-scores for each event/condition (if z_scores exist).
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    rows = []
+    @staticmethod
+    def save_per_participant_zscores(results_dict, output_dir, analysis_type):
+        """
+        Save per-participant mean z-scores for each event/condition (if z_scores exist).
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        rows = []
 
-    for event_key, event_val in results_dict.items():
-        # event_val should be dict of conditions
-        if isinstance(event_val, dict) and 'participants' in event_val:
-            # single-result case
-            if event_val.get('z_scores') is None:
-                continue
-            df = pd.DataFrame({
-                'Participant': event_val['participants'],
-                'Z_Score': event_val['z_scores'],
-                'Event': event_key,
-                'Condition': 'Normal'
-            })
-            per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Z_Score'].mean().reset_index()
-            rows.append(per_participant)
-        else:
-            for cond_key, cond_val in event_val.items():
-                if cond_val.get('z_scores') is None:
+        for event_key, event_val in results_dict.items():
+            # event_val should be dict of conditions
+            if isinstance(event_val, dict) and 'participants' in event_val:
+                # single-result case
+                if event_val.get('z_scores') is None:
                     continue
                 df = pd.DataFrame({
-                    'Participant': cond_val['participants'],
-                    'Z_Score': cond_val['z_scores'],
+                    'Participant': event_val['participants'],
+                    'Z_Score': event_val['z_scores'],
                     'Event': event_key,
-                    'Condition': cond_key
+                    'Condition': 'Normal'
                 })
                 per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Z_Score'].mean().reset_index()
                 rows.append(per_participant)
+            else:
+                for cond_key, cond_val in event_val.items():
+                    if cond_val.get('z_scores') is None:
+                        continue
+                    df = pd.DataFrame({
+                        'Participant': cond_val['participants'],
+                        'Z_Score': cond_val['z_scores'],
+                        'Event': event_key,
+                        'Condition': cond_key
+                    })
+                    per_participant = df.groupby(['Event', 'Condition', 'Participant'])['Z_Score'].mean().reset_index()
+                    rows.append(per_participant)
 
-    if rows:
-        all_df = pd.concat(rows, ignore_index=True)
-        out_path = os.path.join(output_dir, f"{analysis_type}_per_participant_zscores.csv")
-        all_df.to_csv(out_path, index=False)
-        print(f"Saved per-participant z-scores to: {out_path}")
-    else:
-        print("No per-participant z-scores to save (z_scores missing or None).")
+        if rows:
+            all_df = pd.concat(rows, ignore_index=True)
+            out_path = os.path.join(output_dir, f"{analysis_type}_per_participant_zscores.csv")
+            all_df.to_csv(out_path, index=False)
+            print(f"Saved per-participant z-scores to: {out_path}")
+        else:
+            print("No per-participant z-scores to save (z_scores missing or None).")
 
     @staticmethod
     def visualise_condition_deviation(results_dict, output_dir):
