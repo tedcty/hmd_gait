@@ -8,6 +8,28 @@ import json
 from sklearn.metrics import confusion_matrix
 import joblib
 
+# Event abbreviation mapping
+EVENT_ABBREVIATIONS = {
+    "Pick up basketball": "PU",
+    "Put down basketball": "PD",
+    "Stair down": "SD",
+    "Stair up": "SU",
+    "Dribbling basketball": "DB",
+    "Step over cone": "SC",
+    "Place ping pong ball in cup": "PP",
+    "Straight walk": "SW"
+}
+
+# Helper function to abbreviate event pairs
+def abbreviate_pair(pair_key):
+    # Handles "Event1→Event2"
+    if "→" in pair_key:
+        src, tgt = pair_key.split("→")
+        src = src.strip()
+        tgt = tgt.strip()
+        return f"{EVENT_ABBREVIATIONS.get(src, src)}→{EVENT_ABBREVIATIONS.get(tgt, tgt)}"
+    return pair_key
+
 
 class ClassifierDeviationAnalysis:
     """
@@ -470,10 +492,11 @@ class ClassifierDeviationAnalysis:
         # Prepare data for plotting
         plot_data = []
         for pair_key, conditions in results_dict.items():
+            abbr_pair_key = abbreviate_pair(pair_key)
             for condition, result in conditions.items():
                 for spec in result['participant_specificities']:
                     plot_data.append({
-                        'Event_Pair': pair_key,
+                        'Event_Pair': abbr_pair_key,
                         'Condition': condition,
                         'Specificity': spec * 100  # Convert to percentage
                     })
