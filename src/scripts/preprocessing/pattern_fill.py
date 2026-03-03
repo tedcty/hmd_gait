@@ -1,4 +1,4 @@
-from yatpkg.util.data import TRC, Yatsdo
+from ptb.util.data import TRC, Yatsdo
 import numpy as np
 setattr(np, 'NaN', np.nan)  # Ensure NaN is set for numpy
 
