@@ -306,8 +306,9 @@ class MinimalIMUClassifier:
 if __name__ == "__main__":
     
     # Configuration
-    out_root = "/hpc/vlee669/Results/30 Participants/features"
-    results_root = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"
+    # NOTE: Change to your desired directories
+    out_root = "/hpc/vlee669/Results/30 Participants/features"  # Directory where features are stored (same as in upper_body_classifier.py)
+    results_root = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"  # Directory to save minimal IMU model results and comparisons
     
     # Core allocation
     total_cores = multiprocessing.cpu_count()

@@ -850,9 +850,10 @@ if __name__ == "__main__":
     USE_MINIMAL_IMU_SET = True  # Set to True to use only Head_imu and RightForeArm_imu
     
     # Set up paths
-    out_root = "/hpc/vlee669/Results/30 Participants/features"
-    results_dir = "/hpc/vlee669/Results/30 Participants/models"
-    minimal_results_dir = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"
+    # NOTE: Change to your desired directories
+    out_root = "/hpc/vlee669/Results/30 Participants/features"  # Base directory for input features
+    results_dir = "/hpc/vlee669/Results/30 Participants/models"  # Directory to save PCA models and results
+    minimal_results_dir = "/hpc/vlee669/Results/30 Participants/minimal_imu_models"  # Directory for minimal IMU set results (if different from main results_dir)
     
     # Create results directory if it doesn't exist
     os.makedirs(results_dir, exist_ok=True)

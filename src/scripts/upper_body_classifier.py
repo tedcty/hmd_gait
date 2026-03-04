@@ -1032,7 +1032,7 @@ class UpperBodyIMU(Enum):
 
 if __name__ == "__main__":
 
-    # Set up inputs
+    # Set up inputs (NOTE: Change these paths to your actual data locations)
     root_dir = "Z:/Upper Body/Events/"
     # datatypes = ["IMU", "Kinematics"]
     datatypes = ["IMU"]
@@ -1040,9 +1040,10 @@ if __name__ == "__main__":
     # Get all event names from the enum
     events = list(EventWindowSize.events.value.keys())
 
-    out_root = "/hpc/vlee669/Results/30 Participants/features"
-    models_root = "/hpc/vlee669/Results/30 Participants/models"
-    status_file = "/hpc/vlee669/Results/30 Participants/processing_status.txt"
+    # NOTE: Change to your desired output directories
+    out_root = "/hpc/vlee669/Results/30 Participants/features"  # Directory to save extracted features
+    models_root = "/hpc/vlee669/Results/30 Participants/models"  # Directory to save trained models and results
+    status_file = "/hpc/vlee669/Results/30 Participants/processing_status.txt"  # Directory to save processing status logs
 
     # Toggles
     RUN_EXTRACT = False

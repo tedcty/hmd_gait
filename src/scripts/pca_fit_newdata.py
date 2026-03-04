@@ -996,10 +996,11 @@ class DeviationAnalysis:
 
 if __name__ == "__main__":
     # Configuration
-    out_root = "Z:/Upper Body/Results/30 Participants/features"
-    results_dir = "Z:/Upper Body/Results/30 Participants/models"
-    minimal_results_dir = "Z:/Upper Body/Results/30 Participants/minimal_imu_models"
-    output_dir = "Z:/Upper Body/Results/30 Participants/deviation_analysis"
+    # NOTE: Change to your desired output directories
+    out_root = "Z:/Upper Body/Results/30 Participants/features"  # Root directory where the original feature CSVs are stored (used for loading test data)
+    results_dir = "Z:/Upper Body/Results/30 Participants/models"  # Directory where PCA models and top features are stored
+    minimal_results_dir = "Z:/Upper Body/Results/30 Participants/minimal_imu_models"  # Directory where PCA models and top features for minimal IMU set are stored (if different from results_dir)
+    output_dir = "Z:/Upper Body/Results/30 Participants/deviation_analysis"  # Directory to save deviation analysis results and plots
 
     datatype = "IMU"
     minimal_imu_set = True  # Use only Head_imu and RightForeArm_imu
